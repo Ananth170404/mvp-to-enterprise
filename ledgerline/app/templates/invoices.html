@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Invoices · Ledgerline{% endblock %}
+{% block content %}
+<div class="grid two">
+  <div class="card">
+    <h2>Upload an invoice</h2>
+    <form method="post" action="/invoices" enctype="multipart/form-data" class="row">
+      <input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg" required>
+      <button type="submit">Upload</button>
+    </form>
+    <p class="muted">PDF, PNG or JPEG. Uploading the same file twice opens the existing invoice.</p>
+  </div>
+  <div class="card">
+    <h2>Import purchase orders</h2>
+    <form method="post" action="/purchase-orders/import" enctype="multipart/form-data" class="row">
+      <input type="file" name="file" accept=".csv" required>
+      <button class="secondary" type="submit">Import CSV</button>
+    </form>
+    <p class="muted">Columns: po_number, vendor_gstin, vendor_name, currency, description, quantity, unit_price.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between;margin-bottom:8px">
+    <h2 style="margin:0">Invoices</h2>
+    <span class="muted">LLM spend so far: ${{ "%.4f"|format(spend|float) }}</span>
+  </div>
+  <p class="muted">
+    <a href="/invoices">All</a>
+    {% for s in ["needs_review", "approved", "rejected", "extraction_failed", "extracting"] %}
+      · <a href="/invoices?status={{ s }}">{{ s.replace("_", " ") }}</a> ({{ counts.get(s, 0) }})
+    {% endfor %}
+  </p>
+  <table>
+    <thead><tr><th>Status</th><th>Vendor</th><th>Invoice #</th><th>Date</th><th class="num">Total</th><th>Flags</th><th>Uploaded</th></tr></thead>
+    <tbody>
+    {% for inv in invoices %}
+      <tr>
+        <td><span class="status {{ inv.status }}">{{ inv.status.replace("_", " ") }}</span></td>
+        <td><a href="/invoices/{{ inv.id }}">{{ inv.vendor_name or inv.document.original_filename }}</a></td>
+        <td>{{ inv.invoice_number or "—" }}</td>
+        <td>{{ inv.invoice_date or "—" }}</td>
+        <td class="num">{{ fmt(inv.total_minor, inv.currency) }}</td>
+        <td>
+          {% set errs = inv.flags | selectattr("severity", "equalto", "error") | list %}
+          {% set warns = inv.flags | selectattr("severity", "equalto", "warning") | list %}
+          {% if errs %}<span style="color:var(--err)">{{ errs|length }} error{{ "s" if errs|length > 1 }}</span>{% endif %}
+          {% if warns %}<span style="color:var(--warn)">{{ warns|length }} warning{{ "s" if warns|length > 1 }}</span>{% endif %}
+        </td>
+        <td class="muted">{{ inv.created_at.strftime("%d %b %H:%M") }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted">No invoices yet. Generate some with <code>python -m scripts.generate_invoices</code> and upload one.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

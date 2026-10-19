@@ -1,0 +1,45 @@
+# Ledgerline v0 — local development stack.
+# Two services only: Postgres and the API. No Redis, no Celery, no queue yet
+# (see guide Chapter 1: those arrive in Chapter 6, when the pain is real).
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ledgerline
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ledgerline-dev}
+      POSTGRES_DB: ledgerline
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledgerline"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://ledgerline:${POSTGRES_PASSWORD:-ledgerline-dev}@db:5432/ledgerline
+      STORAGE_DIR: /data/storage
+    ports:
+      - "8000:8000"
+    volumes:
+      - storage:/data/storage
+      - ./data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+    # Migrations run before the app starts. Fine at v0 with one instance;
+    # Chapter 2 moves this into the deploy pipeline.
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m app.seed &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  pgdata:
+  storage:

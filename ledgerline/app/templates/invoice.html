@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}{{ invoice.invoice_number or "Invoice" }} · Ledgerline{% endblock %}
+{% block head %}{% if processing %}<meta http-equiv="refresh" content="2">{% endif %}{% endblock %}
+{% block content %}
+<p><a href="/invoices">← All invoices</a></p>
+<div class="row" style="justify-content:space-between;margin-bottom:12px">
+  <h1 style="margin:0">{{ invoice.vendor_name or invoice.document.original_filename }}
+    {% if invoice.invoice_number %}<span class="muted">· {{ invoice.invoice_number }}</span>{% endif %}</h1>
+  <span class="status {{ invoice.status }}">{{ invoice.status.replace("_", " ") }}</span>
+</div>
+
+{% if processing %}
+<div class="msg">Extracting… this page refreshes automatically.</div>
+{% endif %}
+
+<div class="grid two">
+  <div class="card" style="padding:0;overflow:hidden">
+    {% if invoice.document.mime_type == "application/pdf" %}
+      <iframe src="/invoices/{{ invoice.id }}/document" style="width:100%;height:820px;border:0"></iframe>
+    {% else %}
+      <img src="/invoices/{{ invoice.id }}/document" alt="Invoice image" style="width:100%">
+    {% endif %}
+  </div>
+
+  <div>
+    {% if invoice.flags %}
+    <div class="card">
+      <h2>Checks</h2>
+      {% for f in invoice.flags %}
+        <div class="flag {{ f.severity }}">{{ f.message }} <code>{{ f.code }}</code></div>
+      {% endfor %}
+    </div>
+    {% elif invoice.status == "needs_review" %}
+    <div class="card"><h2>Checks</h2><div class="flag info">All checks passed.</div></div>
+    {% endif %}
+
+    {% set editable = invoice.status == "needs_review" %}
+    <div class="card">
+      <h2>Extracted fields</h2>
+      <form method="post" action="/invoices/{{ invoice.id }}/edit">
+        <div class="grid two" style="gap:10px">
+          <div><label>Vendor name</label><input type="text" name="vendor_name" value="{{ invoice.vendor_name or '' }}" {% if not editable %}disabled{% endif %}></div>
+          <div><label>Vendor GSTIN</label><input type="text" name="vendor_tax_id" value="{{ invoice.vendor_tax_id or '' }}" {% if not editable %}disabled{% endif %}></div>
+          <div><label>Invoice number</label><input type="text" name="invoice_number" value="{{ invoice.invoice_number or '' }}" {% if not editable %}disabled{% endif %}></div>
+          <div><label>Invoice date</label><input type="date" name="invoice_date" value="{{ invoice.invoice_date or '' }}" {% if not editable %}disabled{% endif %}></div>
+          <div><label>PO number</label><input type="text" name="po_number" value="{{ invoice.po_number or '' }}" {% if not editable %}disabled{% endif %}></div>
+          <div></div>
+          {% macro amount(minor) %}{% if minor is not none %}{{ "%.2f"|format(minor / 100) }}{% endif %}{% endmacro %}
+          <div><label>Subtotal ({{ invoice.currency }})</label><input type="text" name="subtotal" value="{{ amount(invoice.subtotal_minor) }}" {% if not editable %}disabled{% endif %}></div>
+          <div><label>Tax ({{ invoice.currency }})</label><input type="text" name="tax_total" value="{{ amount(invoice.tax_minor) }}" {% if not editable %}disabled{% endif %}></div>
+          <div><label>Total ({{ invoice.currency }})</label><input type="text" name="total" value="{{ amount(invoice.total_minor) }}" {% if not editable %}disabled{% endif %}></div>
+        </div>
+        {% if editable %}<p><button class="secondary" type="submit">Save corrections</button></p>{% endif %}
+      </form>
+    </div>
+
+    {% if invoice.lines %}
+    <div class="card">
+      <h2>Line items</h2>
+      <table>
+        <thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Unit price</th><th class="num">GST %</th><th class="num">Amount</th></tr></thead>
+        <tbody>
+        {% for l in invoice.lines %}
+          <tr><td>{{ l.description }}</td><td class="num">{{ qty(l.quantity) }}</td>
+              <td class="num">{{ fmt(l.unit_price_minor, invoice.currency) }}</td>
+              <td class="num">{{ qty(l.tax_rate_percent) }}</td>
+              <td class="num">{{ fmt(l.amount_minor, invoice.currency) }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    {% if invoice.status == "needs_review" %}
+    <div class="card">
+      <h2>Decision</h2>
+      {% if user.can_approve %}
+      <form method="post" action="/invoices/{{ invoice.id }}/approve">
+        <label>Reason {% if has_errors %}(required: this invoice has errors){% else %}(optional){% endif %}</label>
+        <input type="text" name="reason" {% if has_errors %}required{% endif %}>
+        <p class="row"><button type="submit">Approve</button></p>
+      </form>
+      <form method="post" action="/invoices/{{ invoice.id }}/reject">
+        <label>Rejection reason (required)</label>
+        <input type="text" name="reason" required>
+        <p class="row"><button class="danger" type="submit">Reject</button></p>
+      </form>
+      {% else %}
+      <p class="muted">You can correct fields. Only an approver can approve or reject.</p>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if invoice.status in ["needs_review", "extraction_failed"] %}
+    <form method="post" action="/invoices/{{ invoice.id }}/reextract" style="margin-bottom:16px">
+      <button class="secondary" type="submit">Re-run extraction</button>
+    </form>
+    {% endif %}
+
+    {% if invoice.extraction_runs %}
+    <div class="card">
+      <h2>Model calls</h2>
+      <table>
+        <thead><tr><th>Model</th><th>Prompt</th><th class="num">Tokens in/out</th><th class="num">Cost</th><th class="num">Latency</th><th>Result</th></tr></thead>
+        <tbody>
+        {% for r in invoice.extraction_runs %}
+          <tr><td>{{ r.model }}</td><td>{{ r.prompt_version }}</td>
+              <td class="num">{{ r.input_tokens if r.input_tokens is not none else "—" }} / {{ r.output_tokens if r.output_tokens is not none else "—" }}</td>
+              <td class="num">{{ "$%.5f"|format(r.cost_usd|float) if r.cost_usd is not none else "unknown" }}</td>
+              <td class="num">{{ r.latency_ms }} ms</td>
+              <td>{{ r.status }}{% if r.error %}<div class="muted">{{ r.error[:200] }}</div>{% endif %}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <h2>Audit trail</h2>
+      <table>
+        <tbody>
+        {% for e in events %}
+          <tr><td class="muted" style="white-space:nowrap">{{ e.created_at.strftime("%d %b %H:%M:%S") }}</td>
+              <td>{{ actor_names.get(e.actor_id, "system") }}</td>
+              <td>{{ e.action }}
+                {% if e.action == "corrected" %}
+                  <div class="muted">{% for k, v in e.after.items() %}{{ k }}: {{ e.before[k] }} → {{ v }}{% if not loop.last %}; {% endif %}{% endfor %}</div>
+                {% elif e.after and e.after.reason %}<div class="muted">{{ e.after.reason }}</div>{% endif %}
+              </td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

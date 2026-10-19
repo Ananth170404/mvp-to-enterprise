@@ -1,0 +1,22 @@
+# Secrets
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Local data
+ledgerline/data/generated/
+ledgerline/data/storage/
+ledgerline/data/eval-results/
+*.db
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
