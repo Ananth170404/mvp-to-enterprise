@@ -132,7 +132,7 @@ def _purchase_order(session: Session, inv: Invoice) -> list[dict]:
             f"Invoice subtotal {fmt(inv.subtotal_minor, inv.currency)} differs from PO {po.po_number} "
             f"total {fmt(po.total_minor, po.currency)}",
         ))
-    for inv_line, po_line in zip(inv.lines, po.lines):
+    for inv_line, po_line in zip(inv.lines, po.lines, strict=False):
         if Decimal(inv_line.quantity) != Decimal(po_line.quantity) or inv_line.unit_price_minor != po_line.unit_price_minor:
             flags.append(_flag(
                 "po_line_mismatch", "warning",

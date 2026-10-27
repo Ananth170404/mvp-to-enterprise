@@ -7,8 +7,8 @@ which is the right amount of UI for testing the riskiest assumption.
 import hashlib
 import logging
 from datetime import date
-from urllib.parse import quote_plus
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -287,7 +287,7 @@ def approve_invoice(
     try:
         workflow.transition(session, invoice, "approved", actor_id=user.id, reason=reason.strip() or None)
     except workflow.InvalidTransition as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     session.commit()
     return RedirectResponse(f"/invoices/{invoice_id}?message=Approved", status_code=303)
 
@@ -307,7 +307,7 @@ def reject_invoice(
     try:
         workflow.transition(session, invoice, "rejected", actor_id=user.id, reason=reason.strip())
     except workflow.InvalidTransition as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     session.commit()
     return RedirectResponse(f"/invoices/{invoice_id}?message=Rejected", status_code=303)
 

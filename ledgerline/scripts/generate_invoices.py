@@ -59,7 +59,8 @@ CATALOG = {
     "industrial": [("Hydraulic oil, 20 L drum", "2710", 18, 4200, 5600), ("Safety helmets", "6506", 18, 350, 520),
                    ("Ball bearings 6205-2RS", "8482", 18, 180, 260), ("Welding electrodes, 5 kg", "8311", 18, 1300, 1750),
                    ("Industrial gloves, pair", "4015", 12, 90, 160)],
-    "services": [("Facility cleaning services (monthly)", "9985", 18, 42000, 60000), ("Security services (monthly)", "9985", 18, 65000, 90000),
+    "services": [("Facility cleaning services (monthly)", "9985", 18, 42000, 60000),
+                 ("Security services (monthly)", "9985", 18, 65000, 90000),
                  ("Annual maintenance contract: HVAC", "9987", 18, 38000, 52000)],
     "food": [("Packaged drinking water, 20 L can", "2201", 18, 60, 90), ("Tea and coffee supplies", "0902", 5, 1800, 2600),
              ("Pantry snacks assortment", "1905", 18, 2400, 3500)],
@@ -239,7 +240,7 @@ def _lines_table(c, inv: Invoice, top: float, show_hsn: bool = True, font: str =
     for n, line in enumerate(inv.lines, 1):
         values = [str(n), line.description[:40], line.hsn if show_hsn else "", f"{line.quantity.normalize():f}",
                   money(line.unit_price), f"{line.rate}%", money(line.amount)]
-        for (_, x, align), value in zip(cols, values):
+        for (_, x, align), value in zip(cols, values, strict=True):
             (c.drawRightString if align == "r" else c.drawString)(x, y, value)
         y -= 15
     c.line(20 * mm, y + 8, w - 20 * mm, y + 8)

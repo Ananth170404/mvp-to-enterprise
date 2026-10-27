@@ -1,5 +1,5 @@
 import time
-from datetime import date
+from datetime import UTC, datetime
 
 from google import genai
 from google.genai import errors, types
@@ -59,5 +59,5 @@ class GeminiProvider:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             latency_ms=latency_ms,
-            cost_usd=cost_usd(model, input_tokens, output_tokens, date.today()),
+            cost_usd=cost_usd(model, input_tokens, output_tokens, datetime.now(UTC).date()),
         )

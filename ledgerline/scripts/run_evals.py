@@ -16,7 +16,7 @@ import statistics
 import sys
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -68,7 +68,7 @@ def same(field: str, expected, actual) -> bool:
 def lines_match(expected: list[dict], actual) -> bool:
     if len(expected) != len(actual):
         return False
-    for e, a in zip(expected, actual):
+    for e, a in zip(expected, actual, strict=True):
         if _dec(e["quantity"]) != _dec(a.quantity) or _dec(e["unit_price"]) != _dec(a.unit_price) or _dec(e["amount"]) != _dec(a.amount):
             return False
     return True
@@ -146,9 +146,9 @@ def print_report(summaries: list[dict]) -> str:
              "|---|" + "---|" * len(summaries)]
     rows = [("Invoices", lambda s: str(s["n"])), ("Valid output", lambda s: pct(s["schema_valid_rate"])),
             ("All fields correct", lambda s: pct(s["all_fields_correct_rate"]))]
-    rows += [(f"  {f}", (lambda f: lambda s: pct(s["field_accuracy"].get(f, 0)))(f)) for f in HEADER_FIELDS + ["line_items"]]
+    rows += [(f"  {f}", lambda s, f=f: pct(s["field_accuracy"].get(f, 0))) for f in HEADER_FIELDS + ["line_items"]]
     scenarios = sorted({k for s in summaries for k in s["scenario_accuracy"]})
-    rows += [(f"Scenario: {sc}", (lambda sc: lambda s: pct(s["scenario_accuracy"].get(sc, 0)))(sc)) for sc in scenarios]
+    rows += [(f"Scenario: {sc}", lambda s, sc=sc: pct(s["scenario_accuracy"].get(sc, 0))) for sc in scenarios]
     rows += [("Cost per invoice", lambda s: money(s["cost_per_invoice_usd"])), ("Total cost", lambda s: money(s["total_cost_usd"])),
              ("Latency p50", lambda s: f"{s['latency_p50_ms']} ms"), ("Latency p95", lambda s: f"{s['latency_p95_ms']} ms")]
     for label, get in rows:
@@ -186,7 +186,7 @@ def main() -> None:
     report = print_report(summaries)
     out_dir = BASE / "data" / "eval-results"
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     (out_dir / f"{stamp}.json").write_text(json.dumps(summaries, indent=2, default=str))
     (out_dir / f"{stamp}.md").write_text(f"# Eval run {stamp} ({args.provider})\n{report}\n")
     print(f"\nSaved results to {out_dir / stamp}.json and .md")
