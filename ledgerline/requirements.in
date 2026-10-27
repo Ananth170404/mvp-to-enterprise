@@ -1,0 +1,13 @@
+# Runtime dependencies: what the production image needs, nothing else.
+# Edit this file, then regenerate the lock file:
+#   uv pip compile requirements.in --python-version 3.12 -o requirements.txt
+fastapi
+uvicorn
+sqlalchemy
+alembic
+psycopg[binary]
+python-multipart
+jinja2
+google-genai
+pydantic
+boto3

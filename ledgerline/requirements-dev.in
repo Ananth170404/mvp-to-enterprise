@@ -1,0 +1,17 @@
+# Development, test and tooling dependencies. Constrained to the same versions
+# as production, so tests run against exactly what ships.
+#   uv pip compile requirements-dev.in --python-version 3.12 -o requirements-dev.txt
+-c requirements.txt
+-r requirements.in
+
+pytest
+httpx
+moto[s3]
+ruff
+pip-audit
+
+# Synthetic data generator
+reportlab
+faker
+pypdfium2
+pillow

@@ -1,0 +1,184 @@
+# Continuous integration for Ledgerline (guide Chapter 2).
+#
+# Every pull request and every push to main runs the checks a careful person
+# would run by hand before a release. Target: under 10 minutes, or people
+# start working around it.
+#
+# Actions are pinned to a full commit SHA, not a tag: a tag can be moved to
+# point at different code, a commit SHA can't.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: ledgerline
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint-and-test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: ledgerline/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Lint (style, likely bugs, security patterns)
+        run: ruff check .
+      - name: Tests
+        run: pytest -q
+      - name: Eval harness runs (fake provider; checks the harness, not a model)
+        run: |
+          python -m scripts.generate_invoices --count 30 --seed 7
+          python -m scripts.run_evals --provider fake --min-accuracy 1.0
+
+  migrations:
+    name: Migrations on real Postgres
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ledgerline
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: ledgerline
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ledgerline"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://ledgerline:ci-only@localhost:5432/ledgerline
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ledgerline:ci-only@localhost:5432/ledgerline
+      APP_DB_PASSWORD: ci-only-app
+      LLM_PROVIDER: fake
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: ledgerline/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Upgrade an empty database to the latest schema
+        run: alembic upgrade head
+      - name: Models and migrations agree (catches "changed the model, forgot the migration")
+        run: alembic check
+      - name: Every migration can be reversed
+        run: alembic downgrade base && alembic upgrade head
+      - name: Least-privilege app user can be created
+        run: python -m app.db_roles
+      - name: Two migration runs at once don't collide
+        run: |
+          alembic downgrade base
+          alembic upgrade head & first=$!
+          alembic upgrade head; second=$?
+          wait $first; first=$?
+          test "$first" -eq 0 && test "$second" -eq 0
+          alembic current | grep -q "(head)"
+
+  security:
+    name: Secrets and dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # scan the whole history: a secret deleted later is still leaked
+      - name: Scan for committed secrets
+        working-directory: .
+        run: |
+          docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            git /repo --redact --verbose
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Known vulnerabilities in production dependencies
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --strict
+
+  eval-gate:
+    name: Model eval (when extraction changes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'pull_request'
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Did the prompt, schema or model code change?
+        id: changes
+        run: |
+          changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          echo "$changed"
+          if echo "$changed" | grep -qE '^ledgerline/app/(extraction|extraction_schema)\.py|^ledgerline/app/llm/'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: steps.changes.outputs.relevant == 'true' && env.GEMINI_API_KEY != ''
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: ledgerline/requirements-dev.txt
+      - name: Run a small real eval and fail below 90% all-fields-correct
+        if: steps.changes.outputs.relevant == 'true' && env.GEMINI_API_KEY != ''
+        run: |
+          pip install -r requirements-dev.txt
+          python -m scripts.generate_invoices --count 30 --seed 7
+          python -m scripts.run_evals --provider gemini --models gemini-3.5-flash-lite \
+            --limit 12 --sleep 4 --min-accuracy 0.9
+      - name: Skipped
+        if: steps.changes.outputs.relevant != 'true' || env.GEMINI_API_KEY == ''
+        run: echo "No extraction changes, or no GEMINI_API_KEY secret configured; eval skipped."
+
+  build:
+    name: Build and smoke-test the production image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [lint-and-test, migrations, security]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the runtime image, tagged with the commit SHA
+        run: |
+          docker build --target runtime \
+            --build-arg GIT_SHA=${{ github.sha }} \
+            -t ledgerline:${{ github.sha }} .
+      - name: The image starts and answers its liveness check
+        run: |
+          docker run -d --name smoke -p 8000:8000 \
+            -e APP_ENV=development -e LLM_PROVIDER=fake -e STORAGE_BACKEND=local \
+            -e STORAGE_DIR=/tmp/storage -e DATABASE_URL=postgresql+psycopg://nobody:x@localhost:1/none \
+            ledgerline:${{ github.sha }}
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8000/livez && exit 0
+            sleep 1
+          done
+          docker logs smoke
+          exit 1
+      - name: The image contains no test tools or generator
+        run: |
+          ! docker run --rm ledgerline:${{ github.sha }} python -c "import pytest" 2>/dev/null
+          ! docker run --rm ledgerline:${{ github.sha }} python -c "import reportlab" 2>/dev/null
+      # Pushing to Amazon ECR and deploying to staging is added in the next step
+      # of Chapter 2, once the AWS account exists.

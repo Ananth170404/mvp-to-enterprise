@@ -1,0 +1,33 @@
+[project]
+name = "ledgerline"
+version = "0.2.0"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+# E/F: errors and pyflakes; I: import order; B: likely bugs; UP: modern syntax;
+# S: security checks (bandit rules); DTZ: timezone-naive datetimes.
+select = ["E", "F", "I", "B", "UP", "S", "DTZ"]
+ignore = [
+    "B008",   # FastAPI's Depends()/File() in defaults is the intended pattern
+    "S101",   # assert is fine in tests
+    "S311",   # random is fine for synthetic data, not used for security
+    "S603",   # subprocess calls with fixed arguments
+    "E731",   # small lambdas in report formatting
+]
+
+[tool.ruff.lint.isort]
+# Same import order whether ruff runs from ledgerline/ or the repository root.
+known-first-party = ["app", "scripts", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/*" = ["S105", "S106", "S108", "DTZ"]
+"**/scripts/generate_invoices.py" = ["DTZ"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning:starlette.*"]
