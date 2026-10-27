@@ -10,6 +10,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
+from app.config import settings
 from app.db import SessionLocal
 from app.models import Tenant, User
 from app.purchase_orders import import_csv
@@ -34,6 +35,8 @@ TENANTS = [
 
 
 def seed() -> None:
+    if settings.is_production:
+        raise SystemExit("Refusing to seed demo users into production.")
     session = SessionLocal()
     try:
         for spec in TENANTS:

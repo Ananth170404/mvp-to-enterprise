@@ -52,6 +52,11 @@ The answer is an **evaluation set**: a collection of real inputs with the correc
 
 Without evals, every change is a guess. With them, "is the model good enough?" becomes a number you can track, and "should we switch to the cheaper model?" becomes a decision you can make with data.
 
+Two things to watch when reading results:
+
+- **A failed call is not a wrong answer.** Rate limits, timeouts, retired models and rejected requests show up as missing outputs. Report them separately from accuracy, grouped by cause, or a model that never answered looks the same as a model that answered badly.
+- **A perfect score means the eval is too easy,** not that the model is perfect. Once the model passes everything, the eval can no longer tell you whether a change made things worse. Add harder and more realistic examples until it fails sometimes.
+
 **Where examples come from:**
 
 1. **Synthetic data you generate yourself.** You know the correct answer for every example by construction, and you can inject hard cases deliberately. Ideal for getting started and for safe public demos.
@@ -201,7 +206,7 @@ At MVP stage, the main costs are your time and, for AI products, model calls. In
 
 For model calls, estimate cost per task, then measure it.
 
-> **Worked example: Ledgerline extraction cost.** Prices from Google's Gemini pricing page, paid Standard tier, checked October 2026. Token counts are an *assumption* (about 1,500 input and 500 output tokens per one-page invoice); the eval script measures the real numbers.
+> **Worked example: Ledgerline extraction cost.** Prices from Google's Gemini pricing page, paid Standard tier, checked October 2026. The estimates below assumed about 1,500 input and 500 output tokens per one-page invoice, before anything was measured.
 >
 > | Model | Input / output per 1M tokens | Est. per invoice | 1,000 invoices / month |
 > |---|---|---|---|
@@ -210,7 +215,20 @@ For model calls, estimate cost per task, then measure it.
 > | gemini-3.8-flash (until Dec 2026) | $0.75 / $3.75 | ~$0.0030 | ~$3.00 |
 > | gemini-3.8-flash (from Jan 2027) | $1.50 / $7.50 | ~$0.0060 | ~$6.00 |
 >
-> Two things stand out. First, extraction is cheap enough that cost isn't the riskiest part; accuracy is. Second, one model's price is scheduled to double, which is why the pricing table in the code carries effective dates instead of a single number.
+> **Then we measured.** The first real eval run, on all 30 synthetic invoices:
+>
+> | Model | Measured cost per invoice | All fields correct | Notes |
+> |---|---|---|---|
+> | gemini-3.5-flash-lite | ~$0.0011 | 30 / 30 | Including the three rotated "phone scan" images |
+> | gemini-3.8-flash | — | not measurable | Most calls failed before answering, so there was nothing to score |
+>
+> Three lessons:
+>
+> 1. **The estimate was about 50% too high.** Real token counts were lower than assumed. Estimates are for deciding whether to start; measurements are for decisions.
+> 2. **30 out of 30 means the eval set is now too easy.** It no longer distinguishes a good change from a bad one. The next step is harder cases: multi-page invoices, handwriting, missing fields, real-world layouts (Chapter 9).
+> 3. **The second model's failures were calls that never answered, not wrong answers.** The eval script now groups failures by cause (rate limit, timeout, retired model, rejected request), because each one has a different fix.
+>
+> Two broader points: extraction is cheap enough that cost isn't the riskiest part; accuracy is. And one model's price is scheduled to double, which is why the pricing table in the code carries effective dates instead of a single number.
 
 General guidance:
 

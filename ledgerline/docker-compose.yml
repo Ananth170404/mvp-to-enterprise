@@ -1,6 +1,24 @@
-# Ledgerline v0 — local development stack.
-# Two services only: Postgres and the API. No Redis, no Celery, no queue yet
-# (see guide Chapter 1: those arrive in Chapter 6, when the pain is real).
+# Ledgerline local development stack.
+#
+# Postgres, a one-off `migrate` job, and the API. Migrations are their own step,
+# like in a real deploy: the API never migrates the database on start.
+# No Redis or Celery yet; those arrive in Chapter 6, when the pain is real.
+
+x-app: &app
+  build:
+    context: .
+    target: dev
+  env_file: .env
+  environment:
+    APP_ENV: development
+    # The app connects as a least-privilege user; migrations as the schema owner.
+    DATABASE_URL: postgresql+psycopg://ledgerline_app:${APP_DB_PASSWORD:-app-dev-pw}@db:5432/ledgerline
+    MIGRATION_DATABASE_URL: postgresql+psycopg://ledgerline:${POSTGRES_PASSWORD:-ledgerline-dev}@db:5432/ledgerline
+    STORAGE_BACKEND: local
+    STORAGE_DIR: /data/storage
+  volumes:
+    - storage:/data/storage
+    - ./data:/app/data
 
 services:
   db:
@@ -19,26 +37,30 @@ services:
       timeout: 3s
       retries: 20
 
-  api:
-    build: .
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+psycopg://ledgerline:${POSTGRES_PASSWORD:-ledgerline-dev}@db:5432/ledgerline
-      STORAGE_DIR: /data/storage
-    ports:
-      - "8000:8000"
-    volumes:
-      - storage:/data/storage
-      - ./data:/app/data
+  migrate:
+    <<: *app
     depends_on:
       db:
         condition: service_healthy
-    # Migrations run before the app starts. Fine at v0 with one instance;
-    # Chapter 2 moves this into the deploy pipeline.
-    command: >
-      sh -c "alembic upgrade head &&
-             python -m app.seed &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    # 1. apply migrations as the owner  2. create/refresh the app's restricted
+    # user  3. load demo users and POs (development only; refuses in production)
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg://ledgerline:${POSTGRES_PASSWORD:-ledgerline-dev}@db:5432/ledgerline
+      MIGRATION_DATABASE_URL: postgresql+psycopg://ledgerline:${POSTGRES_PASSWORD:-ledgerline-dev}@db:5432/ledgerline
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-app-dev-pw}
+      STORAGE_BACKEND: local
+      STORAGE_DIR: /data/storage
+    command: sh -c "alembic upgrade head && python -m app.db_roles && python -m app.seed"
+    restart: "no"
+
+  api:
+    <<: *app
+    ports:
+      - "8007:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:

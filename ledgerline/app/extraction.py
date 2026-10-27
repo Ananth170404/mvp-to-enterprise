@@ -3,7 +3,8 @@
 extract_invoice() is the unit of background work. Today FastAPI runs it as a
 background task in the same process. In Chapter 6 it moves to a Celery worker:
 only the *caller* changes, because this function takes an ID, opens its own
-session and is safe to run twice.
+session and is safe to run twice. If the process dies mid-way, the invoice
+stays in "extracting"; app.maintenance finds and recovers it.
 """
 
 import json
@@ -31,7 +32,9 @@ MAX_ATTEMPTS = 3
 def extract_invoice(invoice_id: str, session_factory=SessionLocal) -> None:
     session: Session = session_factory()
     try:
-        invoice = session.get(Invoice, invoice_id)
+        # Lock the row: if two workers (or a retry and a recovery sweep) pick up
+        # the same invoice, the second waits here, then sees "extracting" and skips.
+        invoice = session.get(Invoice, invoice_id, with_for_update=True)
         if invoice is None:
             log.warning("extract_invoice: invoice %s not found", invoice_id)
             return

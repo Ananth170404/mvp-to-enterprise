@@ -19,6 +19,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -114,10 +115,15 @@ class Document(Base):
 
 class Invoice(Base):
     __tablename__ = "invoices"
+    __table_args__ = (Index("ix_invoices_status_status_changed_at", "status", "status_changed_at"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), unique=True)
     status: Mapped[str] = mapped_column(String(30), default="uploaded", index=True)
+    # When the status last changed. Lets us find work that started and never
+    # finished (e.g. an extraction interrupted by a deploy). Added in migration
+    # 0002 as nullable + backfill: the "expand" step of expand/contract.
+    status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     vendor_id: Mapped[str | None] = mapped_column(ForeignKey("vendors.id"))
     vendor_name: Mapped[str | None] = mapped_column(String(300))

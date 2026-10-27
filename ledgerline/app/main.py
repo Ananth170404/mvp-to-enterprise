@@ -4,23 +4,28 @@ Server-rendered HTML on purpose: one deployable, no separate frontend build,
 which is the right amount of UI for testing the riskiest assumption.
 """
 
+import base64
 import hashlib
 import logging
+import secrets
+import threading
+from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 from urllib.parse import quote_plus
 
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app import audit, checks, workflow
 from app.auth import COOKIE, CurrentUser, LoginRequired, current_user
 from app.config import settings
-from app.db import get_session
+from app.db import engine, get_session
 from app.extraction import extract_invoice
+from app.maintenance import recover_stuck_extractions
 from app.models import AuditEvent, Document, ExtractionRun, Invoice, User
 from app.money import fmt, qty, to_minor
 from app.purchase_orders import POImportError, import_csv
@@ -28,7 +33,23 @@ from app.storage import document_key, storage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-app = FastAPI(title="Ledgerline", version="0.1.0")
+log = logging.getLogger("ledgerline")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Extractions interrupted by the previous shutdown (deploy, crash) are
+    # still marked "extracting". Fail them and retry once, in the background so
+    # startup isn't delayed. Errors here must never stop the app starting.
+    try:
+        for invoice_id in recover_stuck_extractions():
+            threading.Thread(target=extract_invoice, args=(invoice_id,), daemon=True).start()
+    except Exception:
+        log.exception("Startup recovery failed; continuing")
+    yield
+
+
+app = FastAPI(title="Ledgerline", version="0.2.0", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.globals["fmt"] = fmt
 templates.env.globals["qty"] = qty
@@ -47,6 +68,32 @@ def sniff(data: bytes) -> tuple[str, str] | None:
         if data.startswith(magic):
             return mime, ext
     return None
+
+
+UNGATED_PATHS = {"/livez", "/readyz"}
+
+
+@app.middleware("http")
+async def site_password_gate(request: Request, call_next):
+    """A shared password in front of a non-production deploy (HTTP Basic auth).
+
+    The cheap version of "staging must not be public". It sits in front of
+    everything except health checks, which the load balancer calls without it.
+    Replaced by real authentication in Chapter 7.
+    """
+    if settings.site_password and request.url.path not in UNGATED_PATHS:
+        supplied = ""
+        header = request.headers.get("authorization", "")
+        if header.lower().startswith("basic "):
+            try:
+                supplied = base64.b64decode(header[6:]).decode().partition(":")[2]
+            except (ValueError, UnicodeDecodeError):
+                supplied = ""
+        # compare_digest takes the same time whatever the input: no timing leaks.
+        if not secrets.compare_digest(supplied.encode(), settings.site_password.encode()):
+            return Response("Authentication required", status_code=401,
+                            headers={"WWW-Authenticate": 'Basic realm="Ledgerline staging"'})
+    return await call_next(request)
 
 
 @app.exception_handler(LoginRequired)
@@ -79,10 +126,31 @@ def snapshot(inv: Invoice) -> dict:
 # ---------------------------------------------------------------- health & login
 
 
-@app.get("/healthz")
-def healthz(session: Session = Depends(get_session)):
-    session.execute(select(1))
+@app.get("/livez")
+def livez():
+    """Liveness: is this process able to answer at all?
+
+    Deliberately checks nothing else. If it checked the database, a two-minute
+    database blip would make the platform restart every healthy container,
+    turning a small outage into a big one.
+    """
     return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readyz():
+    """Readiness: should this instance receive traffic right now?
+
+    Checks dependencies. A failing readiness check takes the instance out of
+    the load balancer without killing it; it rejoins when the check passes.
+    """
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception:
+        log.exception("Readiness check failed: database unreachable")
+        return JSONResponse({"status": "unavailable", "database": "unreachable"}, status_code=503)
+    return {"status": "ok", "database": "ok"}
 
 
 @app.get("/", include_in_schema=False)
@@ -167,7 +235,7 @@ async def upload_invoice(
         return RedirectResponse(f"/invoices/{invoice.id}?message=This+exact+file+was+already+uploaded", status_code=303)
 
     key = document_key(user.tenant_id, sha, ext)
-    storage.put(key, data)
+    storage.put(key, data, mime)
     doc = Document(
         tenant_id=user.tenant_id, storage_key=key, sha256=sha, mime_type=mime,
         original_filename=(file.filename or "upload")[:500], size_bytes=len(data), uploaded_by=user.id,

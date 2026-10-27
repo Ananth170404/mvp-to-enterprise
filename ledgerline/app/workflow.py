@@ -13,7 +13,7 @@ one) and records each change in the audit log.
 from sqlalchemy.orm import Session
 
 from app import audit
-from app.models import Invoice
+from app.models import Invoice, utcnow
 
 ALLOWED: dict[str, set[str]] = {
     "uploaded": {"extracting"},
@@ -34,6 +34,7 @@ def transition(session: Session, invoice: Invoice, new_status: str, actor_id: st
     if new_status not in ALLOWED.get(old, set()):
         raise InvalidTransition(f"Cannot move invoice from {old!r} to {new_status!r}")
     invoice.status = new_status
+    invoice.status_changed_at = utcnow()
     audit.record(
         session,
         tenant_id=invoice.tenant_id,
