@@ -2,13 +2,14 @@
 
 Nothing secret or environment-specific is hard-coded. The same container image
 runs in development, staging and production; only the environment differs.
-On AWS, secrets reach these variables from Secrets Manager, so this file
-doesn't change between a laptop and the cloud.
+On AWS, ECS injects secrets from Parameter Store and Secrets Manager into
+these variables, so this file doesn't change between a laptop and the cloud.
 """
 
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 ENVIRONMENTS = {"development", "test", "staging", "production"}
 
@@ -17,6 +18,36 @@ def _bool(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def database_url_from_env(prefix: str = "") -> str | None:
+    """The database URL for one database user, from the environment.
+
+    Either a full URL ({prefix}DATABASE_URL), or built from parts, which is how
+    cloud platforms usually inject secrets: one value per variable.
+
+        prefix ""           app user:     DB_USER, DB_PASSWORD
+        prefix "MIGRATION_" schema owner: MIGRATION_DB_USER, MIGRATION_DB_PASSWORD
+        shared by both:     DB_HOST, DB_PORT (5432), DB_NAME (ledgerline), DB_SSLMODE (require)
+
+    Generated passwords contain characters like @ : / % that would corrupt a
+    URL, so user and password are percent-encoded.
+    """
+    full = os.getenv(f"{prefix}DATABASE_URL")
+    if full:
+        return full
+    host = os.getenv("DB_HOST")
+    user = os.getenv(f"{prefix}DB_USER")
+    password = os.getenv(f"{prefix}DB_PASSWORD")
+    if not (host and user and password):
+        return None
+    port = os.getenv("DB_PORT", "5432")
+    name = os.getenv("DB_NAME", "ledgerline")
+    sslmode = os.getenv("DB_SSLMODE", "require")
+    return (
+        f"postgresql+psycopg://{quote(user, safe='')}:{quote(password, safe='')}"
+        f"@{host}:{port}/{quote(name, safe='')}?sslmode={sslmode}"
+    )
 
 
 @dataclass(frozen=True)
@@ -50,10 +81,8 @@ def load_settings() -> Settings:
     base = Path(__file__).resolve().parent.parent
     settings = Settings(
         app_env=os.getenv("APP_ENV", "development"),
-        database_url=os.getenv(
-            "DATABASE_URL",
-            "postgresql+psycopg://ledgerline:ledgerline-dev@localhost:5432/ledgerline",
-        ),
+        database_url=database_url_from_env()
+        or "postgresql+psycopg://ledgerline:ledgerline-dev@localhost:5432/ledgerline",
         storage_backend=os.getenv("STORAGE_BACKEND", "local"),
         storage_dir=Path(os.getenv("STORAGE_DIR", base / "data" / "storage")),
         s3_bucket=os.getenv("S3_BUCKET") or None,

@@ -1,0 +1,8 @@
+# Copy to backend.hcl and fill in your state bucket (output of ../bootstrap).
+# backend.hcl isn't committed: it names your AWS account's bucket.
+bucket       = "ledgerline-tfstate-YOUR_ACCOUNT_ID"
+key          = "staging/terraform.tfstate"
+region       = "ap-southeast-2"
+profile      = "ledgerline"
+use_lockfile = true # S3-native locking: two applies can't run at once
+encrypt      = true

@@ -1,4 +1,3 @@
-import os
 import sys
 import time
 from logging.config import fileConfig
@@ -7,13 +6,13 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app import models  # noqa: F401  (registers tables on Base.metadata)
-from app.config import settings
+from app.config import database_url_from_env, settings
 from app.db import Base
 
 config = context.config
 # Migrations can run as a different database user from the app: the app's user
 # can read and write rows but not change the schema (least privilege).
-DATABASE_URL = os.getenv("MIGRATION_DATABASE_URL") or settings.database_url
+DATABASE_URL = database_url_from_env("MIGRATION_") or settings.database_url
 config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
 
 # Arbitrary constant: every migration run takes the same Postgres advisory lock,

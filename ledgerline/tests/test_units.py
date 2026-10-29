@@ -81,3 +81,26 @@ def test_s3_storage_round_trip():
         assert not store.exists("tenants/t1/documents/missing.pdf")
         head = client.head_object(Bucket="ll-test", Key="tenants/t1/documents/abc.pdf")
         assert head["ServerSideEncryption"] == "AES256"
+
+
+def test_database_url_built_from_parts_survives_special_characters(monkeypatch):
+    from urllib.parse import unquote, urlsplit
+
+    from app.config import database_url_from_env
+
+    for var in ["DATABASE_URL", "MIGRATION_DATABASE_URL"]:
+        monkeypatch.delenv(var, raising=False)
+    password = "p@ss:w/rd%#?&="  # the kind of thing a password generator produces
+    monkeypatch.setenv("DB_HOST", "db.example.internal")
+    monkeypatch.setenv("MIGRATION_DB_USER", "ledgerline")
+    monkeypatch.setenv("MIGRATION_DB_PASSWORD", password)
+
+    url = database_url_from_env("MIGRATION_")
+    parts = urlsplit(url.replace("postgresql+psycopg", "postgresql"))
+    assert parts.hostname == "db.example.internal" and parts.port == 5432
+    assert unquote(parts.password) == password
+    assert parts.path == "/ledgerline" and parts.query == "sslmode=require"
+    assert database_url_from_env() is None  # app user's parts aren't set
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://x:y@h/db")
+    assert database_url_from_env() == "postgresql+psycopg://x:y@h/db"  # a full URL wins

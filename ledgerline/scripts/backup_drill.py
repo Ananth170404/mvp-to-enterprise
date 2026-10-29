@@ -19,7 +19,6 @@ point-in-time recovery; guide Chapter 2 covers the drill there.
 """
 
 import argparse
-import os
 import shutil
 import subprocess
 import sys
@@ -30,6 +29,8 @@ from pathlib import Path
 
 import psycopg
 from psycopg import sql
+
+from app.config import database_url_from_env
 
 
 def libpq(url: str) -> str:
@@ -60,7 +61,7 @@ def check(name: str, ok: bool, detail: str, results: list) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--source", default=os.getenv("MIGRATION_DATABASE_URL") or os.getenv("DATABASE_URL"))
+    parser.add_argument("--source", default=database_url_from_env("MIGRATION_") or database_url_from_env())
     parser.add_argument("--out", type=Path, default=None, help="Keep the dump file here")
     parser.add_argument("--keep", action="store_true", help="Don't drop the scratch database afterwards")
     parser.add_argument("--skip-files", action="store_true", help="Don't check document files in storage")

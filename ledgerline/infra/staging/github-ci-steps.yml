@@ -1,0 +1,29 @@
+# Paste into .github/workflows/ci.yml, in the `build` job.
+#
+# 1) Directly under `build:` (same indentation as `runs-on:`), add:
+
+    permissions:
+      contents: read
+      id-token: write # lets the job ask GitHub for an OIDC token
+
+# 2) At the END of the build job's `steps:` list (after the smoke tests), add:
+
+      # ---- Publish: only pushes to main, and only once AWS is configured.
+      # The image pushed is the exact one built and tested above (build once).
+      - name: Log in to AWS with OIDC (no stored keys)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Log in to Amazon ECR
+        id: ecr
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != ''
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+      - name: Push the tested image, tagged with the commit SHA
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_ROLE_ARN != ''
+        run: |
+          image="${{ steps.ecr.outputs.registry }}/ledgerline:${{ github.sha }}"
+          docker tag "ledgerline:${{ github.sha }}" "$image"
+          docker push "$image"
+          echo "Pushed \`$image\`" >> "$GITHUB_STEP_SUMMARY"

@@ -1,7 +1,8 @@
 """Create or refresh the app's least-privilege database user.
 
-Runs scripts/db_roles.sql as the schema owner (MIGRATION_DATABASE_URL), with
-the app user's password from APP_DB_PASSWORD. Safe to run on every deploy.
+Runs scripts/db_roles.sql as the schema owner (MIGRATION_DATABASE_URL, or
+DB_HOST + MIGRATION_DB_USER + MIGRATION_DB_PASSWORD), setting the app user's
+password from DB_PASSWORD (or APP_DB_PASSWORD). Safe to run on every deploy.
 
     python -m app.db_roles
 """
@@ -13,14 +14,16 @@ from pathlib import Path
 import psycopg
 from psycopg import sql
 
+from app.config import database_url_from_env
+
 SQL_FILE = Path(__file__).resolve().parent.parent / "scripts" / "db_roles.sql"
 
 
 def main() -> None:
-    url = os.getenv("MIGRATION_DATABASE_URL")
-    password = os.getenv("APP_DB_PASSWORD")
+    url = database_url_from_env("MIGRATION_")
+    password = os.getenv("APP_DB_PASSWORD") or os.getenv("DB_PASSWORD")
     if not url or not password:
-        sys.exit("Set MIGRATION_DATABASE_URL and APP_DB_PASSWORD.")
+        sys.exit("Set the schema owner's connection (MIGRATION_DATABASE_URL or MIGRATION_DB_*) and APP_DB_PASSWORD or DB_PASSWORD.")
     url = url.replace("postgresql+psycopg://", "postgresql://")
 
     script = SQL_FILE.read_text()
