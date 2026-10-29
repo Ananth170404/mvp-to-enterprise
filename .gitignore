@@ -22,10 +22,10 @@ ledgerline/data/eval-results/
 .vscode/
 
 # Terraform
-   .terraform/
-   *.tfstate
-   *.tfstate.*
-   *.tfplan
-   crash.log
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
 
 backend.hcl
