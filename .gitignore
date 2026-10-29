@@ -20,3 +20,10 @@ ledgerline/data/eval-results/
 .DS_Store
 .idea/
 .vscode/
+
+# Terraform
+   .terraform/
+   *.tfstate
+   *.tfstate.*
+   *.tfplan
+   crash.log
