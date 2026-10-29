@@ -171,7 +171,8 @@ def login(user_id: str = Form(...), session: Session = Depends(get_session)):
     if not settings.dev_login or session.get(User, user_id) is None:
         raise HTTPException(status_code=400)
     response = RedirectResponse("/invoices", status_code=303)
-    response.set_cookie(COOKIE, user_id, httponly=True, samesite="lax")
+    # response.set_cookie(COOKIE, user_id, httponly=True, samesite="lax")
+    response.set_cookie(COOKIE, user_id, httponly=True, samesite="lax", secure=settings.is_deployed)
     return response
 
 

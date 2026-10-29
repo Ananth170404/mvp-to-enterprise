@@ -5,7 +5,7 @@
 #   Step 3  Postgres (RDS)                          <- database.tf, network.tf
 #   Step 4  secrets                                 <- secrets.tf
 #   Step 5  GitHub Actions pushes images           <- github_ci.tf
-#   Step 6  the app on ECS Fargate + migration task, deployed by CI
+#   Step 6  the app on ECS Fargate, deployed by CI  <- app.tf
 #
 #   cd ledgerline/infra/staging
 #   copy backend.hcl.example backend.hcl      (then fill in your bucket name)

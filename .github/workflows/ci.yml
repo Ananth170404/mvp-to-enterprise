@@ -19,7 +19,9 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push cancels an older pull-request run. On main, runs queue
+  # instead: cancelling a deploy halfway (mid-migration) is worse than waiting.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
@@ -157,6 +159,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [lint-and-test, migrations, security]
+    outputs:
+      image: ${{ steps.push.outputs.image }}
     env:
       # Publish only on pushes to main, and only once AWS is configured.
       PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_REGION != '' }}
@@ -173,16 +177,21 @@ jobs:
             -e APP_ENV=development -e LLM_PROVIDER=fake -e STORAGE_BACKEND=local \
             -e STORAGE_DIR=/tmp/storage -e DATABASE_URL=postgresql+psycopg://nobody:x@localhost:1/none \
             ledgerline:${{ github.sha }}
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             curl -fsS http://localhost:8000/livez && exit 0
             sleep 1
           done
           docker logs smoke
           exit 1
       - name: The image contains no test tools or generator
+        # (A line starting with `!` never fails a bash step, so test explicitly.)
         run: |
-          ! docker run --rm ledgerline:${{ github.sha }} python -c "import pytest" 2>/dev/null
-          ! docker run --rm ledgerline:${{ github.sha }} python -c "import reportlab" 2>/dev/null
+          for module in pytest reportlab; do
+            if docker run --rm "ledgerline:${{ github.sha }}" python -c "import $module" 2>/dev/null; then
+              echo "::error::$module is in the runtime image"
+              exit 1
+            fi
+          done
       # ---- Publish. The image pushed is the exact one built and tested above.
       # Credentials: a push-only IAM user's key in GitHub secrets (infra/staging/
       # github_ci.tf explains why not OIDC on this account). Secrets are never
@@ -199,9 +208,40 @@ jobs:
         if: env.PUBLISH == 'true'
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
       - name: Push the tested image, tagged with the commit SHA
+        id: push
         if: env.PUBLISH == 'true'
         run: |
           image="${{ steps.ecr.outputs.registry }}/ledgerline:${{ github.sha }}"
           docker tag "ledgerline:${{ github.sha }}" "$image"
           docker push "$image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
           echo "Pushed \`$image\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-staging:
+    name: Deploy to staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build]
+    # Only when an image was pushed, and once the ECS environment exists
+    # (set the ECS_CLUSTER variable after `terraform apply` in Step 6).
+    if: needs.build.outputs.image != '' && vars.ECS_CLUSTER != ''
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_URL }}
+    concurrency:
+      group: deploy-staging # one deploy at a time, never cancelled midway
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Migrate, then roll out the new version
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}
+          CLUSTER: ${{ vars.ECS_CLUSTER }}
+        run: bash scripts/deploy_ecs.sh
+      - name: Summary
+        run: echo "Deployed \`${{ needs.build.outputs.image }}\` to ${{ vars.STAGING_URL }}" >> "$GITHUB_STEP_SUMMARY"
