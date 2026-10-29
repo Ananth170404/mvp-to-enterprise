@@ -1,6 +1,8 @@
 # Chapter 2: Production readiness
 
-> **In this chapter:** what changes when real people depend on your software. Environments, configuration and secrets, CI, deployments and rollback, database migrations that don't break running code, backups you have actually restored, and health checks that don't make outages worse.
+> **In this chapter:** what changes when real people depend on your software. Environments, configuration and secrets, CI, deployments and rollback, database migrations that don't break running code, backups you have actually restored, health checks that don't make outages worse, and container images and local stacks built the way production needs them.
+>
+> **Part 2, [Staging on AWS with Terraform](02b-staging-on-aws.md),** puts all of it into practice on a real cloud: infrastructure as code, secrets, CI that publishes and deploys, and the problems you'll hit along the way.
 
 ---
 
@@ -252,7 +254,169 @@ The cheap version, before a job queue (Chapter 6):
 
 ---
 
-## 2.9 Challenges and watch-outs
+## 2.9 Containers done properly
+
+The container image is the unit you build once and promote through every environment (2.2). That only works if the image itself is built for production. A Dockerfile that runs on your laptop usually isn't: it's large, runs as root, contains your test tools, sometimes contains secrets, and ignores the platform's stop signal.
+
+This section is the practical checklist, then a worked example you can copy, then the commands to check it.
+
+### What a production image needs
+
+| Practice | Why | How |
+|---|---|---|
+| **Pin the base image** | `python:latest` changes under you; so do the system tools inside it | Name the exact variant (`python:3.12-slim-trixie`). For full reproducibility, pin the digest (`@sha256:…`) |
+| **Install from a lock file** | `>=` ranges install whatever is newest that day | Exact versions in `requirements.txt` (or `poetry.lock`, `uv.lock`, `package-lock.json`) |
+| **Copy dependency files before code** | Docker caches each layer; code changes then don't reinstall every dependency | `COPY requirements.txt` → `RUN pip install` → `COPY app` |
+| **Separate build targets** | Test tools, compilers and generators in production are attack surface and bloat | Multi-stage Dockerfile: a `runtime` target that ships, a `dev` target for local work |
+| **Run as a non-root user** | If the app is compromised, root inside the container makes escaping and tampering easier | `RUN useradd …` then `USER appuser` |
+| **No secrets in the image** | Anyone who can pull the image can read every layer, including `ENV` and `ARG` values (`docker history`) | Secrets arrive as environment variables at run time. `.env` is listed in `.dockerignore` |
+| **A `.dockerignore`** | Without it, `COPY . .` sends your `.env`, `.git` and local data into the build | Exclude secrets, caches, generated data and VCS folders |
+| **Exec-form `CMD`** | Shell form (`CMD uvicorn …`) runs under `/bin/sh`, which doesn't pass the stop signal on; the app never shuts down gracefully and gets killed | `CMD ["uvicorn", "app.main:app", …]` |
+| **Graceful shutdown shorter than the platform's timeout** | The platform waits a fixed time (30 s on ECS by default) and then kills | Set the server's graceful timeout a little below it (`--timeout-graceful-shutdown 25`) |
+| **Logs to stdout, unbuffered** | Platforms collect stdout; buffered output is lost when a container dies | `PYTHONUNBUFFERED=1`; never log to files inside the container |
+| **Configuration from the environment** | One image for every environment | No environment names or URLs baked in |
+| **Know what's running** | "Which version is in production?" should have a one-word answer | Pass the commit SHA as a build argument and expose it |
+| **Trust the proxy only where there is one** | Behind a load balancer, the client's IP and scheme arrive in headers | Enable proxy-header handling in the server for deployed images |
+
+Two habits that catch most mistakes:
+
+1. **Test the shipped image, not just the code.** In CI, build the runtime target, start it, and call its liveness endpoint. Also assert that things which shouldn't be there aren't (for example, that `pytest` can't be imported).
+2. **Keep development conveniences out of the runtime target.** Auto-reload, bind mounts, seed data and debug tools belong in the `dev` target and in Compose, never in what ships.
+
+### Worked example: Ledgerline's Dockerfile
+
+One file, two images:
+
+```dockerfile
+# Pinned base. Debian 13's postgresql-client is v17, new enough to back up
+# a Postgres 16 server (pg_dump must be at least the server's version).
+FROM python:3.12-slim-trixie AS base
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+RUN useradd --create-home --uid 1000 appuser
+
+# ---- runtime: what ships to staging and production
+FROM base AS runtime
+# Dependencies before code, so code changes reuse the cached install layer.
+COPY requirements.txt .
+# Exact, locked versions.
+RUN pip install -r requirements.txt
+# Only what the app needs at run time.
+COPY alembic.ini .
+COPY migrations ./migrations
+COPY app ./app
+# "Which version is running?" has an answer.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
+# Never run as root.
+USER appuser
+# Exec form, so the stop signal reaches uvicorn; graceful timeout below ECS's 30 s.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
+     "--proxy-headers", "--forwarded-allow-ips", "*", "--timeout-graceful-shutdown", "25"]
+
+# ---- dev: runtime + test tools, generator and pg_dump; used by docker compose
+FROM base AS dev
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install -r requirements-dev.txt
+COPY . .
+USER appuser
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+```
+
+Build them with:
+
+```bash
+docker build --target runtime --build-arg GIT_SHA=$(git rev-parse HEAD) -t ledgerline:$(git rev-parse --short HEAD) .
+docker build --target dev -t ledgerline:dev .
+```
+
+### The local stack with Compose
+
+Compose describes how the pieces start together. Use it to rehearse the production deploy order, not to hide it.
+
+**Principles:**
+
+- **Wait for health, not for start.** "The database container started" doesn't mean "the database accepts connections". Give stateful services a health check, and make dependants wait on `service_healthy`.
+- **Model one-off jobs as one-off services.** Migrations run once, exit, and the app waits on `service_completed_successfully`, exactly as a deploy pipeline runs a migration task before starting the new version.
+- **Same image, different credentials.** The migration job and the app run the same image; the job connects as the schema owner, the app as the restricted user.
+- **Know which volumes hold state.** `docker compose down` keeps named volumes (your database); `docker compose down -v` deletes them.
+- **Ports are `host:container`.** To move the app to another port on your machine, change only the host side (`"8007:8000"`). The container keeps listening where the image and CI expect.
+
+> **Worked example: Ledgerline's local stack**
+>
+> ```
+> db (Postgres 16) ──healthy──▶ migrate (one-off) ──exit 0──▶ api
+>                                │                              │
+>                                ├ alembic upgrade head         ├ connects as ledgerline_app
+>                                │   (as ledgerline, the owner) │   (rows only)
+>                                ├ python -m app.db_roles       ├ startup sweep: recover
+>                                │   (create ledgerline_app)    │   interrupted extractions
+>                                └ python -m app.seed           └ uvicorn with --reload
+>                                    (demo data; dev only)
+> ```
+>
+> ```yaml
+> services:
+>   db:
+>     image: postgres:16
+>     healthcheck:
+>       test: ["CMD-SHELL", "pg_isready -U ledgerline"]
+>   migrate:
+>     build: { context: ., target: dev }
+>     depends_on: { db: { condition: service_healthy } }
+>     command: sh -c "alembic upgrade head && python -m app.db_roles && python -m app.seed"
+>     restart: "no"
+>   api:
+>     build: { context: ., target: dev }
+>     ports: ["8000:8000"]
+>     depends_on: { migrate: { condition: service_completed_successfully } }
+> ```
+>
+> The full file is `ledgerline/docker-compose.yml`. In Chapter 1, the API ran `alembic upgrade head` itself on every start; with two instances starting together, both would try to migrate (exercise 2.11, question 2).
+
+### Checking the stack
+
+Run these from the folder that contains `docker-compose.yml`. Replace `8000` with your host port if you changed it.
+
+| What you're checking | bash / zsh | PowerShell | Expect |
+|---|---|---|---|
+| Start-up order | `docker compose ps -a` | same | `migrate` exited 0; `db` and `api` running |
+| Why something stopped | `docker compose logs api --tail 30` | same | Start-up messages, or the error |
+| Liveness | `curl -s localhost:8000/livez` | `curl.exe -s http://localhost:8000/livez` | `{"status":"ok"}` |
+| Readiness | `curl -s localhost:8000/readyz` | `curl.exe -s http://localhost:8000/readyz` | ok, database ok |
+| Liveness vs readiness | `docker compose stop db`, then both checks, then `docker compose start db` | same | `livez` ok, `readyz` 503 while the database is down |
+| Schema version | `docker compose exec -T db psql -U ledgerline -d ledgerline -tAc "select version_num from alembic_version"` | same | The latest migration |
+| Restricted app user | `… -tAc "select rolname from pg_roles where rolname='ledgerline_app'"` | same | `ledgerline_app` |
+| Tests | `docker compose run --rm --no-deps api pytest -q \| tail -1` | `… 2>&1 \| Select-Object -Last 1` | All passed |
+| Backup restores | `docker compose run --rm api python -m scripts.backup_drill \| tail -1` | `… 2>&1 \| Select-Object -Last 1` | `RESULT: PASS` |
+| Rebuild after dependency changes | `docker compose up --build` | same | New image used |
+| Start clean (deletes local data) | `docker compose down -v` | same | Volumes removed |
+
+### Common problems
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| A service shows `exited 255` after a restart of Docker Desktop | The engine stopped it | Check `logs`; `docker compose up -d` |
+| Old behaviour after changing code or requirements | Compose reused the cached image | `docker compose up --build` |
+| `port is already allocated` | Something else uses the host port | Change the host side of the mapping |
+| `Permission denied` writing to a bind-mounted folder (Linux) | Container user (UID 1000) doesn't own it | `sudo chown 1000 data` |
+| `Found orphan containers` | A service was renamed or removed | `docker compose up --remove-orphans` |
+| `database system was not properly shut down` | Postgres was killed rather than stopped | Recovers automatically; stop with `docker compose down` or Ctrl+C |
+| `pg_dump: server version mismatch` | Client tools older than the server | Use a client at least as new as the server |
+| `head` not found, or `curl` asks for `Uri:` (Windows) | PowerShell aliases `curl` to `Invoke-WebRequest` and has no `head` | Use `curl.exe` and `Select-Object -Last N` |
+
+### By stage and product type
+
+- **MVP:** one Dockerfile and a Compose file. The points in the table above are cheap from day one; retrofitting non-root or secret-free images later is harder.
+- **Growth:** smaller images (distroless or minimal bases), image vulnerability scanning in CI, a build cache in CI.
+- **Enterprise, and anything self-hosted by customers:** the image becomes a product. Customers will ask for signed images, a software bill of materials (SBOM), a vulnerability policy and supported base images (Chapters 8 and 13).
+- **Internal tools:** often must use the company's approved base images and private registry; find out before you build.
+
+---
+
+## 2.10 Challenges and watch-outs
 
 - **Staging drift.** Staging slowly diverges from production (different versions, manual fixes, missing settings) until it stops predicting anything. Build both from the same code and configuration templates.
 - **"We have backups."** Until restored, you have files. Drill.
@@ -270,7 +434,7 @@ The cheap version, before a job queue (Chapter 6):
 
 ---
 
-## 2.10 Exercise: find the production bugs
+## 2.11 Exercise: find the production bugs
 
 Here's an app that works perfectly on a laptop. Find what breaks in production.
 
@@ -320,7 +484,7 @@ It's a web app that accepts uploads and processes each one with a background tas
 
 ---
 
-## 2.11 Cost
+## 2.12 Cost
 
 At this stage the new costs are CI minutes and a staging environment.
 
@@ -340,12 +504,12 @@ At this stage the new costs are CI minutes and a staging environment.
 Things that change the number a lot:
 
 - **NAT gateways** cost about $33 per month per availability zone before data charges, often more than everything else combined. Small environments can avoid them by giving containers public IPs (restricted by security groups), at some cost in isolation.
-- **Turning staging off** when nobody is using it. Containers can scale to zero; a stopped database still charges for storage, and a load balancer charges while it exists. Infrastructure as code makes deleting and recreating the whole environment routine (Chapter 4).
+- **Turning staging off** when nobody is using it. Containers can scale to zero; a stopped database still charges for storage, and a load balancer charges while it exists. Infrastructure as code makes deleting and recreating the whole environment routine ([part 2](02b-staging-on-aws.md#2b11-day-to-day-operations)).
 - A **single small VM running the whole stack** costs roughly a third as much, at the price of doing your own database backups and having no rolling deploys. A legitimate MVP choice; Chapter 4 compares the options.
 
 ---
 
-## 2.12 Demo
+## 2.13 Demo
 
 The reference implementation is in [`ledgerline/`](../ledgerline/README.md).
 
@@ -364,11 +528,11 @@ Then:
 4. Install the hooks (`pre-commit install` at the repository root) and try committing a file containing a fake API key.
 5. Push a branch to GitHub and read the CI run.
 
-**Next in this chapter:** deploying the same image to a staging environment on AWS, with migrations as a one-off task, secrets from Parameter Store, files in S3, and a restore drill against a real managed database.
+**Next in this chapter:** [part 2, Staging on AWS with Terraform](02b-staging-on-aws.md), which deploys the same image to a real staging environment: migrations as a one-off task, secrets from Parameter Store, files in S3, and CI that tests, publishes and deploys.
 
 ---
 
-## 2.13 Checklist
+## 2.14 Checklist
 
 You're production-ready at this stage when:
 
@@ -385,7 +549,11 @@ You're production-ready at this stage when:
 - [ ] RPO and RTO are written down, and a restore drill has met them
 - [ ] Uploaded files and other non-database data are backed up and included in the drill
 - [ ] Liveness and readiness are separate checks
+- [ ] The shipped image is a separate target: pinned base, locked dependencies, non-root user, exec-form command, no secrets, no test tools
+- [ ] The local stack starts in the same order as a deploy: database healthy, migrations, then the app
 - [ ] Interrupted background work is detected and recovered
+
+For the cloud deployment itself, see [the checklist in part 2](02b-staging-on-aws.md#2b15-checklist).
 
 ---
 

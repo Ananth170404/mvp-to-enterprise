@@ -25,7 +25,7 @@ Developers who can build an MVP and want to understand what comes next: reliabil
 |---|---|---|
 | 0 | [Foundations](guide/00-foundations.md) | Draft |
 | 1 | [The honest MVP](guide/01-honest-mvp.md) | Draft |
-| 2 | [Production readiness](guide/02-production-readiness.md) | Draft (AWS staging part in progress) |
+| 2 | [Production readiness](guide/02-production-readiness.md) — and part 2: [Staging on AWS with Terraform](guide/02b-staging-on-aws.md) | Draft |
 | 3 | Observability | Planned |
 | 4 | Deployment models and infrastructure | Planned |
 | 5 | The data layer | Planned |
