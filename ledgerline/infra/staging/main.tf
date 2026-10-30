@@ -7,6 +7,9 @@
 #   Step 5  GitHub Actions pushes images           <- github_ci.tf
 #   Step 6  the app on ECS Fargate, deployed by CI  <- app.tf
 #
+# Chapter 3: alerts, alarms, uptime canary, dashboard  <- observability.tf
+#            (+ CloudWatch agent sidecar in app.tf, Sentry DSN in secrets.tf)
+#
 #   cd ledgerline/infra/staging
 #   copy backend.hcl.example backend.hcl      (then fill in your bucket name)
 #   terraform init -backend-config=backend.hcl
@@ -24,6 +27,10 @@ terraform {
     random = {
       source  = "hashicorp/random"
       version = "~> 3.7" # 3.7+ has ephemeral random_password (secrets.tf)
+    }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.7" # zips the uptime canary's script (observability.tf)
     }
   }
 

@@ -21,11 +21,14 @@ ledgerline/data/eval-results/
 .idea/
 .vscode/
 
-# Terraform
+# Terraform: providers and state never go in git (state can contain secrets).
+# The dependency lock file (.terraform.lock.hcl) DOES go in git.
 .terraform/
 *.tfstate
 *.tfstate.*
 *.tfplan
 crash.log
-
+# Backend settings name your account's state bucket; commit backend.hcl.example instead.
 backend.hcl
+# Personal Terraform values (e.g. alert email); commit terraform.tfvars.example instead.
+terraform.tfvars

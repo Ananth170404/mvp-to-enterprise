@@ -17,6 +17,13 @@ ROOT = Path(__file__).resolve().parent.parent
 TMP = Path(tempfile.mkdtemp(prefix="ledgerline-tests-"))
 GENERATED = TMP / "generated"
 
+# Tests must never send telemetry anywhere, whatever the developer's shell or
+# docker compose has set: no OTLP export, no Sentry. (Real exporters would also
+# take over the global OpenTelemetry providers the tests use to check spans.)
+for name in ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+             "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "SENTRY_DSN"):
+    os.environ.pop(name, None)
+
 os.environ.update(
     {
         "APP_ENV": "test",

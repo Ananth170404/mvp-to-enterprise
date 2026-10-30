@@ -39,6 +39,7 @@ certifi==2026.10.23
     #   httpcore
     #   httpx
     #   requests
+    #   sentry-sdk
 cffi==2.1.1
     # via
     #   -c requirements.txt
@@ -81,6 +82,10 @@ google-genai==2.33.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
+googleapis-common-protos==1.76.0
+    # via
+    #   -c requirements.txt
+    #   opentelemetry-exporter-otlp-proto-http
 h11==0.16.0
     # via
     #   -c requirements.txt
@@ -132,14 +137,67 @@ moto==5.2.4
     # via -r requirements-dev.in
 msgpack==1.2.3
     # via cachecontrol
-opentelemetry-api==1.45.1
+opentelemetry-api==1.45.2
     # via
     #   -c requirements.txt
     #   fastapi
+    #   opentelemetry-exporter-http-transport
+    #   opentelemetry-exporter-otlp-proto-http
+    #   opentelemetry-instrumentation
+    #   opentelemetry-instrumentation-httpx
+    #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
+opentelemetry-exporter-http-transport==0.66b2
+    # via
+    #   -c requirements.txt
+    #   opentelemetry-exporter-otlp-proto-http
+opentelemetry-exporter-otlp-common==0.66b2
+    # via
+    #   -c requirements.txt
+    #   opentelemetry-exporter-otlp-proto-http
+opentelemetry-exporter-otlp-proto-common==1.45.2
+    # via
+    #   -c requirements.txt
+    #   opentelemetry-exporter-otlp-proto-http
+opentelemetry-exporter-otlp-proto-http==1.45.2
+    # via
+    #   -c requirements.txt
+    #   -r requirements.in
+opentelemetry-instrumentation==0.66b2
+    # via
+    #   -c requirements.txt
+    #   opentelemetry-instrumentation-httpx
+opentelemetry-instrumentation-httpx==0.66b2
+    # via
+    #   -c requirements.txt
+    #   -r requirements.in
+opentelemetry-proto==1.45.2
+    # via
+    #   -c requirements.txt
+    #   opentelemetry-exporter-otlp-proto-common
+    #   opentelemetry-exporter-otlp-proto-http
+opentelemetry-sdk==1.45.2
+    # via
+    #   -c requirements.txt
+    #   -r requirements.in
+    #   opentelemetry-exporter-otlp-common
+    #   opentelemetry-exporter-otlp-proto-http
+opentelemetry-semantic-conventions==0.66b2
+    # via
+    #   -c requirements.txt
+    #   opentelemetry-instrumentation
+    #   opentelemetry-instrumentation-httpx
+    #   opentelemetry-sdk
+opentelemetry-util-http==0.66b2
+    # via
+    #   -c requirements.txt
+    #   opentelemetry-instrumentation-httpx
 packageurl-python==0.17.6
     # via cyclonedx-python-lib
 packaging==26.3
     # via
+    #   -c requirements.txt
+    #   opentelemetry-instrumentation
     #   pip-audit
     #   pip-requirements-parser
     #   pytest
@@ -159,6 +217,11 @@ platformdirs==4.13.5
     # via pip-audit
 pluggy==1.7.0
     # via pytest
+protobuf==7.36.2
+    # via
+    #   -c requirements.txt
+    #   googleapis-common-protos
+    #   opentelemetry-proto
 psycopg==3.3.6
     # via
     #   -c requirements.txt
@@ -224,6 +287,8 @@ requests==2.34.2
     #   google-auth
     #   google-genai
     #   moto
+    #   opentelemetry-exporter-http-transport
+    #   opentelemetry-exporter-otlp-proto-http
     #   pip-audit
     #   responses
 responses==0.26.3
@@ -236,6 +301,10 @@ s3transfer==0.19.3
     # via
     #   -c requirements.txt
     #   boto3
+sentry-sdk==2.73.0
+    # via
+    #   -c requirements.txt
+    #   -r requirements.in
 six==1.17.0
     # via
     #   -c requirements.txt
@@ -272,6 +341,9 @@ typing-extensions==4.16.0
     #   fastapi
     #   google-genai
     #   opentelemetry-api
+    #   opentelemetry-exporter-otlp-proto-http
+    #   opentelemetry-sdk
+    #   opentelemetry-semantic-conventions
     #   psycopg
     #   pydantic
     #   pydantic-core
@@ -289,6 +361,7 @@ urllib3==2.8.0
     #   botocore
     #   requests
     #   responses
+    #   sentry-sdk
 uvicorn==0.54.0
     # via
     #   -c requirements.txt
@@ -299,5 +372,10 @@ websockets==17.3
     #   google-genai
 werkzeug==3.1.9
     # via moto
+wrapt==2.5.2
+    # via
+    #   -c requirements.txt
+    #   opentelemetry-instrumentation
+    #   opentelemetry-instrumentation-httpx
 xmltodict==1.0.4
     # via moto

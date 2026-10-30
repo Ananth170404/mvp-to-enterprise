@@ -11,3 +11,14 @@ jinja2
 google-genai
 pydantic
 boto3
+
+# Observability (Chapter 3). FastAPI traces requests itself (native
+# OpenTelemetry); these add the SDK, the OTLP exporter, and spans for outbound
+# HTTP. Instrumentation packages are versioned 0.x "b" (beta) even when stable
+# in practice; they move in lockstep with the SDK. Database spans come from a
+# small hook in app/observability.py: the SQLAlchemy instrumentation package
+# didn't support SQLAlchemy 2.1 yet (October 2026).
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-httpx>=0.66b2
+sentry-sdk

@@ -71,11 +71,24 @@ resource "aws_ssm_parameter" "gemini_api_key" {
   value_wo_version = var.secret_versions.gemini_api_key
 }
 
+# Sentry DSN (Chapter 3). Same pattern as the Gemini key: Terraform creates a
+# placeholder, you set the real value from the CLI. The app treats anything
+# that isn't an https:// URL as "Sentry off", so the placeholder is harmless.
+#   aws ssm put-parameter --name /ledgerline/staging/sentry_dsn --type SecureString --overwrite --value <dsn>
+resource "aws_ssm_parameter" "sentry_dsn" {
+  name             = "${local.ssm_prefix}/sentry_dsn"
+  description      = "Sentry DSN for error tracking (set manually; placeholder until then)"
+  type             = "SecureString"
+  value_wo         = "not-set"
+  value_wo_version = 1
+}
+
 output "secret_parameters" {
   description = "Parameter Store names. Values are never shown by Terraform."
   value = {
     app_db_password = aws_ssm_parameter.app_db_password.name
     site_password   = aws_ssm_parameter.site_password.name
     gemini_api_key  = aws_ssm_parameter.gemini_api_key.name
+    sentry_dsn      = aws_ssm_parameter.sentry_dsn.name
   }
 }

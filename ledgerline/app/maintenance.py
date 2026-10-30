@@ -55,7 +55,9 @@ def recover_stuck_extractions(older_than_minutes: int | None = None, session_fac
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    from app.observability import configure_logging
+
+    configure_logging(settings.log_format)
     parser = argparse.ArgumentParser(description="Ledgerline maintenance jobs")
     sub = parser.add_subparsers(dest="command", required=True)
     stuck = sub.add_parser("recover-stuck", help="Fail (and optionally retry) extractions that never finished")

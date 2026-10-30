@@ -1,7 +1,8 @@
 # Ledgerline local development stack.
 #
-# Postgres, a one-off `migrate` job, and the API. Migrations are their own step,
-# like in a real deploy: the API never migrates the database on start.
+# Postgres, a one-off `migrate` job, the API, and a local observability stack.
+# Migrations are their own step, like in a real deploy: the API never migrates
+# the database on start.
 # No Redis or Celery yet; those arrive in Chapter 6, when the pain is real.
 
 x-app: &app
@@ -16,6 +17,10 @@ x-app: &app
     MIGRATION_DATABASE_URL: postgresql+psycopg://ledgerline:${POSTGRES_PASSWORD:-ledgerline-dev}@db:5432/ledgerline
     STORAGE_BACKEND: local
     STORAGE_DIR: /data/storage
+    # Traces and metrics go to the local Grafana stack (Chapter 3). In AWS the
+    # same variables point somewhere else; the code doesn't change.
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+    OTEL_SERVICE_NAME: ledgerline
   volumes:
     - storage:/data/storage
     - ./data:/app/data
@@ -56,12 +61,25 @@ services:
 
   api:
     <<: *app
+    
     ports:
       - "8007:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
 
+  # Grafana's all-in-one OpenTelemetry stack, for development only: an OTLP
+  # collector plus Tempo (traces), Prometheus (metrics), Loki (logs) and
+  # Grafana to look at them. Open http://localhost:3000 (no login).
+  otel-lgtm:
+    image: grafana/otel-lgtm:0.29.2
+    ports:
+      - "3000:3000"   # Grafana
+      - "4318:4318"   # OTLP over HTTP, if you run the app outside Docker
+    volumes:
+      - lgtm:/data
+
 volumes:
   pgdata:
   storage:
+  lgtm:

@@ -28,10 +28,19 @@ from app.extraction import extract_invoice
 from app.maintenance import recover_stuck_extractions
 from app.models import AuditEvent, Document, ExtractionRun, Invoice, User
 from app.money import fmt, qty, to_minor
+from app.observability import (
+    configure_logging,
+    fastapi_telemetry_config,
+    request_context_middleware,
+    setup_sentry,
+    setup_telemetry,
+)
 from app.purchase_orders import POImportError, import_csv
 from app.storage import document_key, storage
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+configure_logging(settings.log_format)
+# Before the app is created, so errors during start-up are reported too.
+setup_sentry(settings.sentry_dsn, environment=settings.app_env, release=settings.git_sha)
 
 log = logging.getLogger("ledgerline")
 
@@ -49,7 +58,8 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Ledgerline", version="0.2.0", lifespan=lifespan)
+setup_telemetry(engine, service_version=settings.git_sha, environment=settings.app_env)
+app = FastAPI(title="Ledgerline", version="0.2.0", lifespan=lifespan, telemetry=fastapi_telemetry_config())
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.globals["fmt"] = fmt
 templates.env.globals["qty"] = qty
@@ -94,6 +104,11 @@ async def site_password_gate(request: Request, call_next):
             return Response("Authentication required", status_code=401,
                             headers={"WWW-Authenticate": 'Basic realm="Ledgerline staging"'})
     return await call_next(request)
+
+
+# Registered last, so it runs first (outermost): even a request rejected by the
+# password gate gets a request ID and an access log line.
+app.middleware("http")(request_context_middleware)
 
 
 @app.exception_handler(LoginRequired)
@@ -153,6 +168,17 @@ def readyz():
     return {"status": "ok", "database": "ok"}
 
 
+@app.get("/_debug/error", include_in_schema=False)
+def debug_error():
+    """Fail on purpose, to test error reporting and alerts end to end.
+
+    Not available in production; on staging it's behind the site password.
+    """
+    if settings.is_production:
+        raise HTTPException(status_code=404)
+    raise RuntimeError("Deliberate test error from /_debug/error")
+
+
 @app.get("/", include_in_schema=False)
 def root():
     return RedirectResponse("/invoices", status_code=303)
@@ -171,7 +197,7 @@ def login(user_id: str = Form(...), session: Session = Depends(get_session)):
     if not settings.dev_login or session.get(User, user_id) is None:
         raise HTTPException(status_code=400)
     response = RedirectResponse("/invoices", status_code=303)
-    # response.set_cookie(COOKIE, user_id, httponly=True, samesite="lax")
+    # secure: deployed environments are HTTPS-only, so never send the cookie over plain HTTP.
     response.set_cookie(COOKIE, user_id, httponly=True, samesite="lax", secure=settings.is_deployed)
     return response
 

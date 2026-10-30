@@ -66,6 +66,10 @@ class Settings:
     max_upload_bytes: int
     fake_llm_manifest: Path
     stuck_after_minutes: int
+    # Observability (Chapter 3). OpenTelemetry reads its own OTEL_* variables.
+    sentry_dsn: str | None = None
+    log_format: str = "json"  # json | text
+    git_sha: str = "unknown"  # baked into the image at build time
 
     @property
     def is_production(self) -> bool:
@@ -96,6 +100,9 @@ def load_settings() -> Settings:
         fake_llm_manifest=Path(os.getenv("FAKE_LLM_MANIFEST", base / "data" / "generated" / "manifest.json")),
         # Longer than the slowest possible extraction (3 attempts x 120 s timeout + backoff).
         stuck_after_minutes=int(os.getenv("STUCK_AFTER_MINUTES", "10")),
+        sentry_dsn=os.getenv("SENTRY_DSN") or None,
+        log_format=os.getenv("LOG_FORMAT", "json"),
+        git_sha=os.getenv("GIT_SHA", "unknown"),
     )
     validate(settings)
     return settings
@@ -122,6 +129,8 @@ def validate(s: Settings) -> None:
         raise RuntimeError("STORAGE_BACKEND=s3 requires S3_BUCKET.")
     if s.llm_provider == "gemini" and not s.gemini_api_key:
         raise RuntimeError("LLM_PROVIDER=gemini requires GEMINI_API_KEY.")
+    if s.log_format not in {"json", "text"}:
+        raise RuntimeError(f"LOG_FORMAT must be json or text, got {s.log_format!r}.")
 
 
 settings = load_settings()

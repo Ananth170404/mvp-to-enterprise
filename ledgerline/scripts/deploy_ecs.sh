@@ -25,11 +25,13 @@ trap 'rm -rf "$workdir"' EXIT
 
 # Copy the latest revision of a family, swap the image, register it.
 # Terraform owns everything else in the definition (settings, secrets, sizes).
+# Only containers running OUR image are changed; sidecars (the CloudWatch
+# agent) keep theirs.
 register() {
   local family="$1"
   aws ecs describe-task-definition --task-definition "$family" --query taskDefinition --output json \
     | jq --arg image "$IMAGE" '
-        .containerDefinitions[0].image = $image
+        (.containerDefinitions[] | select(.image | test("/ledgerline:"))).image = $image
         | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
               .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)' \
     > "$workdir/$family.json"

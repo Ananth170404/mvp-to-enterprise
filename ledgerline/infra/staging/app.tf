@@ -97,6 +97,7 @@ data "aws_iam_policy_document" "read_secrets" {
       aws_ssm_parameter.app_db_password.arn,
       aws_ssm_parameter.site_password.arn,
       aws_ssm_parameter.gemini_api_key.arn,
+      aws_ssm_parameter.sentry_dsn.arn,
     ]
   }
   statement {
@@ -138,13 +139,15 @@ resource "aws_iam_role_policy" "task_documents" {
 
 # ---------------------------------------------------------------- task definitions
 
-# The web app.
+# The web app, plus the CloudWatch agent as a sidecar (Chapter 3): the app
+# sends OpenTelemetry to localhost:4318, the agent signs it and forwards it to
+# CloudWatch. Containers in one Fargate task share a network namespace.
 resource "aws_ecs_task_definition" "app" {
   family                   = "${local.name}-app"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = 256 # 0.25 vCPU
-  memory                   = 512 # MiB
+  cpu                      = 256  # 0.25 vCPU, shared by both containers
+  memory                   = 1024 # MiB: app ~512, agent ~256, headroom (Fargate allows 512, 1024 or 2048 at 0.25 vCPU)
   execution_role_arn       = aws_iam_role.task_execution.arn
   task_role_arn            = aws_iam_role.task.arn
 
@@ -160,9 +163,16 @@ resource "aws_ecs_task_definition" "app" {
 
     portMappings = [{ containerPort = local.container_port, protocol = "tcp" }]
 
+    # Start after the agent has started (not "HEALTHY": the agent image has no
+    # health check, so waiting for healthy would hang the deploy).
+    dependsOn = [{ containerName = "cloudwatch-agent", condition = "START" }]
+
     environment = concat(local.common_environment, [
       { name = "LLM_PROVIDER", value = var.llm_provider },
       { name = "DEV_LOGIN", value = "true" }, # demo login; requires SITE_PASSWORD (enforced by the app)
+      # OpenTelemetry: the same variables as local development, a different address.
+      { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://localhost:4318" },
+      { name = "OTEL_SERVICE_NAME", value = "ledgerline" },
     ])
 
     # Injected as environment variables when the container starts. The values
@@ -171,6 +181,7 @@ resource "aws_ecs_task_definition" "app" {
       { name = "DB_PASSWORD", valueFrom = aws_ssm_parameter.app_db_password.arn },
       { name = "SITE_PASSWORD", valueFrom = aws_ssm_parameter.site_password.arn },
       { name = "GEMINI_API_KEY", valueFrom = aws_ssm_parameter.gemini_api_key.arn },
+      { name = "SENTRY_DSN", valueFrom = aws_ssm_parameter.sentry_dsn.arn },
     ]
 
     # Liveness (guide 2.8): restart the container if the process stops answering.
@@ -193,7 +204,39 @@ resource "aws_ecs_task_definition" "app" {
         awslogs-stream-prefix = "app"
       }
     }
+    }, {
+    name  = "cloudwatch-agent"
+    image = var.cloudwatch_agent_image
+    # Not essential: if the agent dies, the app keeps serving. Telemetry must
+    # never take the application down with it.
+    essential         = false
+    memoryReservation = 256
+    environment = [
+      # Receive OTLP on localhost:4317 (gRPC) and :4318 (HTTP); send traces to
+      # X-Ray (Transaction Search) and metrics to CloudWatch's OTel metric store.
+      { name = "CW_CONFIG_CONTENT", value = jsonencode({ opentelemetry = { collect = { otlp = {} } } }) },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.app.name
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "cwagent"
+      }
+    }
   }])
+}
+
+variable "cloudwatch_agent_image" {
+  description = "CloudWatch agent image (needs 1.300070.0+ for OTLP). Pin a version or digest once you've seen it work."
+  type        = string
+  default     = "public.ecr.aws/cloudwatch-agent/cloudwatch-agent:latest"
+}
+
+# The agent signs telemetry with the TASK role's credentials.
+resource "aws_iam_role_policy_attachment" "task_cloudwatch_agent" {
+  role       = aws_iam_role.task.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
 }
 
 # The one-off migration task: runs before every deploy, then exits (guide 2.6).

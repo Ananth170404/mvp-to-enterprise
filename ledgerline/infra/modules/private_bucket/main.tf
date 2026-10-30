@@ -22,6 +22,12 @@ variable "noncurrent_version_days" {
   default     = 30
 }
 
+variable "expire_after_days" {
+  description = "Delete objects this many days after creation (null = keep). For short-lived data such as test artifacts."
+  type        = number
+  default     = null
+}
+
 variable "force_destroy" {
   description = "Allow `terraform destroy` to delete a bucket that still has objects. Keep false for anything holding real data."
   type        = bool
@@ -72,6 +78,12 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
     filter {}
     noncurrent_version_expiration {
       noncurrent_days = var.noncurrent_version_days
+    }
+    dynamic "expiration" {
+      for_each = var.expire_after_days == null ? [] : [var.expire_after_days]
+      content {
+        days = expiration.value
+      }
     }
   }
   depends_on = [aws_s3_bucket_versioning.this]

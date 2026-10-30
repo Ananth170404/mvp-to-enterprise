@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_session
 from app.models import User
+from app.observability import set_user_context
 
 COOKIE = "ll_dev_user"
 
@@ -42,4 +43,5 @@ def current_user(request: Request, session: Session = Depends(get_session)) -> C
     user = session.get(User, user_id) if user_id else None
     if user is None:
         raise LoginRequired()
+    set_user_context(user.tenant_id, user.id)  # every later log line and error carries them
     return CurrentUser(id=user.id, tenant_id=user.tenant_id, name=user.name, role=user.role)

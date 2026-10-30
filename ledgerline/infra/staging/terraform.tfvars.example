@@ -1,0 +1,8 @@
+# Copy to terraform.tfvars (git-ignored) and fill in. Terraform loads it
+# automatically. Personal values go here, not in committed code.
+alert_email = "you@example.com"
+
+# Optional overrides
+# alarms_enabled              = true
+# llm_cost_alarm_usd_per_hour = 1
+# llm_provider                = "fake"   # or "gemini" once the key is set
