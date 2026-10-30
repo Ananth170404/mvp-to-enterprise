@@ -4,6 +4,12 @@
 
 Everything here was built and deployed for real while writing it, in October 2026, on an AWS account created with the new sign-up experience. Where AWS, Terraform or Windows got in the way, the problem and the fix are written down, because you will probably hit them too.
 
+**How to use this part for your own app.** The steps are written so you can follow them with any web app that has a database, in any language. Ledgerline (Python and Postgres) is the example, and its complete Terraform is in [`ledgerline/infra/`](../ledgerline/infra/), ready to copy.
+
+1. Check your app meets the contract in [2B.1](#is-your-app-ready-for-this). Most of it is part 1 of this chapter.
+2. Read [2B.2](#2b2-infrastructure-as-code-and-terraform-in-one-sitting) if Terraform is new to you.
+3. Follow Steps 1–6 in order, using [2B.14, Doing this for your own app](#2b14-doing-this-for-your-own-app) to see what to change at each step.
+
 ---
 
 ## Contents
@@ -21,8 +27,9 @@ Everything here was built and deployed for real while writing it, in October 202
 - [2B.11 Day-to-day operations](#2b11-day-to-day-operations)
 - [2B.12 Troubleshooting: what actually went wrong](#2b12-troubleshooting-what-actually-went-wrong)
 - [2B.13 Cost](#2b13-cost)
-- [2B.14 By stage and product type](#2b14-by-stage-and-product-type)
-- [2B.15 Checklist](#2b15-checklist)
+- [2B.14 Doing this for your own app](#2b14-doing-this-for-your-own-app)
+- [2B.15 By stage and product type](#2b15-by-stage-and-product-type)
+- [2B.16 Checklist](#2b16-checklist)
 
 ---
 
@@ -59,6 +66,42 @@ Every arrow is something that has to be allowed explicitly, and every box is def
 | Logs | CloudWatch Logs | Everything the containers print |
 
 > **Why not something simpler?** A single small server running Docker Compose would cost about a third as much, and it's a legitimate MVP choice ([2.12](02-production-readiness.md#212-cost)). This guide uses managed services because they are what most teams grow into, and the patterns (separate migrations, health-checked rolling deploys, injected secrets) carry over to any platform. Chapter 4 compares the options properly.
+
+### Is your app ready for this?
+
+The infrastructure is the easy part to copy. What usually blocks a first deploy is the app itself. Before writing any Terraform, your app must meet this contract:
+
+| # | Your app must… | Why it matters on a platform like this | How (part 1) |
+|---|---|---|---|
+| 1 | **Run as a container image** that listens on one port and doesn't run as root | ECS runs images, nothing else | [2.9](02-production-readiness.md#29-containers-done-properly) |
+| 2 | **Read all configuration from environment variables**, one secret per variable | ECS injects settings and secrets as variables; you can't edit files inside a running container | [2.3](02-production-readiness.md#23-configuration-and-secrets) |
+| 3 | **Keep nothing on local disk** that must survive: uploads to object storage, sessions in the database or cookies | Containers are replaced on every deploy, and their disks go with them | [2.3](02-production-readiness.md#23-configuration-and-secrets) |
+| 4 | **Log to standard output**, not to files | That's what gets shipped to CloudWatch | [2.9](02-production-readiness.md#29-containers-done-properly) |
+| 5 | **Have two health endpoints:** liveness (answers if the process is alive) and readiness (also checks the database) | The platform restarts on one and routes traffic on the other | [2.8](02-production-readiness.md#28-health-checks-shutdowns-and-interrupted-work) |
+| 6 | **Run migrations as a separate command**, not on app start-up, and keep them backward compatible | Two copies of the app start at once during a deploy; both running migrations collide | [2.6](02-production-readiness.md#26-database-migrations-in-production) |
+| 7 | **Shut down cleanly on SIGTERM** within about 25 seconds | ECS sends SIGTERM, waits 30 seconds, then kills the container | [2.8](02-production-readiness.md#28-health-checks-shutdowns-and-interrupted-work) |
+| 8 | **Know it's behind a proxy:** trust `X-Forwarded-*` headers, and build no absolute `http://` links | Requests arrive from the load balancer over HTTP, while the user is on HTTPS | This part, [Step 6](#2b10-step-6-running-the-app) |
+
+Test it locally first. If `docker compose up` starts your app from a clean database with a separate migration step, and stopping the database makes readiness fail but not liveness, you're ready.
+
+### Words you'll meet
+
+| Term | Meaning in one line |
+|---|---|
+| **Region** | A geographic AWS location (`ap-southeast-2` = Sydney). Most resources live in exactly one |
+| **Availability zone (AZ)** | A separate data centre inside a region. Spreading across two survives one failing |
+| **VPC / subnet** | Your private network, and its slices (one per AZ) |
+| **Security group** | A firewall attached to a resource: who may connect, on which port |
+| **IAM user / role / policy** | An identity with long-lived keys / an identity that's *assumed* for temporary credentials / a JSON document listing allowed actions |
+| **ARN** | A resource's full unique name, e.g. `arn:aws:ecr:ap-southeast-2:123456789012:repository/ledgerline` |
+| **SCP** | Service control policy: an organisation-wide rule that can *deny* actions even to administrators |
+| **ECR / ECS / Fargate** | The container registry / the container scheduler / serverless capacity for ECS |
+| **Task definition / task / service** | A container recipe / one running copy / "keep N copies running" |
+| **ALB / target group** | The load balancer / the set of containers it sends traffic to, with a health check |
+| **RDS** | Managed relational databases (Postgres, MySQL, ...) |
+| **SSM Parameter Store / Secrets Manager** | Two places to keep secrets; the second can rotate them automatically |
+| **CloudFront** | AWS's CDN; here, the thing that gives us HTTPS |
+| **OIDC** | A standard that lets CI prove its identity to AWS without stored keys |
 
 ---
 
@@ -1130,6 +1173,8 @@ git commit --allow-empty -m "Resume staging" && git push      # deploy sets the 
 
 While paused, you still pay for the load balancer, its public IPs and storage (see [Cost](#2b13-cost)). The database restarts itself after 7 days stopped.
 
+> **After Chapter 3**, pausing also silences alarm notifications and stops the uptime canary, and resuming turns them back on *last*. Otherwise the alarms correctly report that staging is down. The full sequence is in [Chapter 3, part 2: Pausing without false alarms](03b-observability-on-aws.md#3b13-pausing-without-false-alarms).
+
 ### Switch from the fake LLM to Gemini
 
 ```bash
@@ -1226,7 +1271,151 @@ What's deliberately **not** here, and would be in production:
 
 ---
 
-## 2B.14 By stage and product type
+## 2B.14 Doing this for your own app
+
+Everything above is Ledgerline's environment. This section is the recipe for yours. The Terraform in [`ledgerline/infra/`](../ledgerline/infra/) is meant to be copied. Only a small number of values are specific to Ledgerline, and they're all listed here.
+
+### 1. Copy the infrastructure and the deploy pieces
+
+```
+your-repo/
+├── infra/                        ← copy ledgerline/infra/ (bootstrap/, modules/, staging/)
+├── scripts/deploy_ecs.sh         ← copy as is; it's not specific to any app
+├── .github/workflows/ci.yml      ← add the publish steps and the deploy-staging job (2B.9, 2B.10)
+└── .gitignore                    ← add the Terraform lines (2B.2)
+```
+
+Don't copy `.terraform/`, `terraform.tfstate` or `backend.hcl` if they exist in your copy.
+
+### 2. Change the names
+
+Search the copied `infra/` folder for `ledgerline`. These are all the places, and what each one means:
+
+| File | Value | Change to |
+|---|---|---|
+| `bootstrap/main.tf`, `staging/main.tf` | `default_tags { project = "ledgerline" }` | Your project name (shows in cost reports) |
+| `bootstrap/main.tf` | `state_bucket = "ledgerline-tfstate-${account_id}"` | `yourapp-tfstate-${account_id}` |
+| `staging/main.tf` | `local.name = "ledgerline-${var.environment}"` | `yourapp-${var.environment}`. This prefixes nearly every resource name: cluster, service, database, roles, buckets |
+| `staging/main.tf` | `aws_ecr_repository.app.name = "ledgerline"` | Your image name. Also change it in the CI push step (`…/ledgerline:${{ github.sha }}`) |
+| `staging/secrets.tf` | `ssm_prefix = "/ledgerline/${var.environment}"` | `/yourapp/${var.environment}` |
+| `staging/database.tf` | `db_name`, `username = "ledgerline"` | Your database name and owner user |
+| `staging/app.tf` | `DB_USER = "ledgerline_app"` | Your app's restricted database user, or remove it if you use one user (not recommended, see part 1, 2.3) |
+| `*/main.tf` | `variable "region"`, `variable "aws_profile"` | Your region and the profile name you used with `aws login` |
+| `staging/backend.hcl` | `bucket`, `region`, `profile` | Your state bucket (output of bootstrap) |
+
+Names that contain the account ID (S3 buckets) are unique worldwide. Everything else only needs to be unique in your account.
+
+### 3. Describe your app in `app.tf`
+
+This is the file that changes most, because it describes *your* container. Go through it top to bottom:
+
+| What | Where in `app.tf` | Ledgerline's value | Yours |
+|---|---|---|---|
+| The port the app listens on **inside** the container | `local.container_port` | `8000` | Whatever your server binds to (3000, 8080…). Not the host port from Compose |
+| Liveness check | `healthCheck.command` | `python -c "urllib…/livez"` | A command that exists in **your** image; see the table below |
+| Readiness check | `aws_lb_target_group.health_check.path` | `/readyz` | Your readiness path (`/health/ready`, `/up`…) |
+| Settings | `common_environment`, `environment` | `APP_ENV`, `DB_HOST`, `S3_BUCKET`… | The variable names **your** app reads |
+| Secrets | `secrets` | `DB_PASSWORD`, `SITE_PASSWORD`, `GEMINI_API_KEY` | Your secrets (see "Adding a secret" below) |
+| Migration command | `aws_ecs_task_definition.migrate` `command` | `alembic upgrade head && python -m app.db_roles && python -m app.seed` | Your migration command; see below |
+| Size | `cpu`, `memory` | `256`, `512` (0.25 vCPU, 0.5 GB) | Start small; raise if CloudWatch shows memory near the limit. Valid pairs are fixed: 256 CPU allows 512–2048 MB |
+| CPU type | `runtime_platform.cpu_architecture` | `X86_64` | `ARM64` is about 20% cheaper on Fargate, but only if CI builds an ARM image |
+| Variables your app doesn't need | `variable "llm_provider"`, `GEMINI_API_KEY` | AI-specific | Delete them |
+
+**Liveness commands by stack.** The command runs *inside your image*, so it may only use what's installed there:
+
+| Image based on | Liveness `command` |
+|---|---|
+| Python | `["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:PORT/livez', timeout=3)"]` |
+| Node.js | `["CMD", "node", "-e", "fetch('http://127.0.0.1:PORT/livez').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]` |
+| Image with `curl` or `wget` | `["CMD-SHELL", "curl -fsS http://127.0.0.1:PORT/livez || exit 1"]` |
+| Distroless or scratch (Go, Rust) | No shell or tools. Build a tiny `healthcheck` mode into your binary (`["CMD", "/app", "healthcheck"]`), or remove `healthCheck` and rely on the load balancer's check |
+
+**Migration commands by stack.** The migration task uses the **same image** as the app, so the migration tool must be installed in the runtime image:
+
+| Stack | Typical command |
+|---|---|
+| Python + Alembic | `alembic upgrade head` |
+| Django | `python manage.py migrate --noinput` |
+| Rails | `bin/rails db:migrate` |
+| Node + Prisma | `npx prisma migrate deploy` (needs the `prisma` CLI in production dependencies) |
+| Node + Knex / TypeORM | `npx knex migrate:latest` / `npx typeorm migration:run -d dist/data-source.js` |
+| Laravel | `php artisan migrate --force` |
+| Go | `migrate -path /migrations -database "$DATABASE_URL" up` (golang-migrate, copied into the image) |
+| Java (Flyway) | `flyway migrate`, or run it on start-up in a separate task |
+
+If your app runs migrations on start-up today, move them out first (part 1, [2.6](02-production-readiness.md#26-database-migrations-in-production)). With rolling deploys, two copies start at once.
+
+### 4. Adding a secret touches three places
+
+This catches everyone once. A new secret, say `STRIPE_API_KEY`, needs:
+
+| # | File | What to add |
+|---|---|---|
+| 1 | `secrets.tf` | The parameter. Generated (`ephemeral` + `value_wo`), or a placeholder you overwrite with `aws ssm put-parameter` |
+| 2 | `app.tf`, `read_secrets` policy | The parameter's ARN, so the **execution role** may read it |
+| 3 | `app.tf`, container `secrets` | `{ name = "STRIPE_API_KEY", valueFrom = aws_ssm_parameter.stripe_api_key.arn }` |
+
+Miss step 2, and the task never starts. The stopped task's reason says *"ResourceInitializationError: unable to pull secrets or registry auth … AccessDenied"*. Find it in the console (the service → **Tasks** → filter **Stopped**), or with `aws ecs list-tasks --cluster … --desired-status STOPPED` and `aws ecs describe-tasks … --query "tasks[].stoppedReason"`. The deploy script's rollback check will also fail the CI run.
+
+A plain setting (not secret) only needs the `environment` list.
+
+### 5. Remove what you don't use
+
+| If your app has no… | Remove |
+|---|---|
+| File uploads | `module "documents"` (main.tf), the `documents_bucket` policy and `task_documents` (app.tf), `S3_BUCKET` and `STORAGE_BACKEND`. The task role can stay with no policies, ready for the first AWS service your code calls, or be removed along with `task_role_arn` |
+| Shared staging password | `site_password` (secrets.tf and app.tf). But then something else must keep staging private: real authentication, or CloudFront restricted to your office IPs |
+| Demo data | The `seed` part of the migration command |
+| Separate database users | `DB_USER` for the app user, and the `db_roles` step. Then the app runs as the schema owner, which is not recommended |
+
+Then run `terraform plan`. Terraform errors list any references to what you deleted, which is a quick way to find the rest.
+
+### 6. Different database, or no database
+
+- **MySQL / MariaDB:** `engine = "mysql"` (or `"mariadb"`), the matching `engine_version`, and port `3306` in the database security group rule.
+- **No relational database** (DynamoDB, or a hosted database such as Neon, Supabase or Atlas): delete `database.tf` and the database security group. Remove the migration task if there's nothing to migrate, and change `deploy_ecs.sh` to skip that step. Pass the external connection string as a secret, and check the provider allows connections from AWS (an IP allow-list won't work with Fargate's changing IPs, so use the provider's AWS private connectivity or authentication-only access).
+
+### 7. CI: what to keep, what to adapt
+
+- **Keep:** "build once, push the tested image, tagged with the SHA" and the deploy job (migrate → roll out → verify). Neither depends on your language.
+- **Adapt:** the test, lint and build jobs before it, to your stack.
+- **Use OIDC if your account allows it.** Classic AWS accounts (sign-up "advanced") do. Replace the IAM user in `github_ci.tf` with the provider and role from [2B.9](#the-right-way-oidc-no-stored-keys), and remember that the deploy job's trust condition is `repo:OWNER/REPO:environment:staging`. In the workflow, replace the access-key inputs with `role-to-assume`, and add `permissions: id-token: write` to both the build and deploy jobs.
+- **Variables to set in GitHub:** `AWS_REGION`, `ECS_CLUSTER` (`yourapp-staging`), `STAGING_URL`. The deploy script derives the service and task family names from the cluster name (`<cluster>-app`, `<cluster>-migrate`). Keep that naming, or set `SERVICE`, `APP_FAMILY` and `MIGRATE_FAMILY` in the job's `env`.
+
+### 8. Apply in order, and check each step
+
+| Step | Apply | Check before moving on |
+|---|---|---|
+| 1 | `bootstrap/` | The bucket exists; you've stored `bootstrap/terraform.tfstate` safely |
+| 2 | `staging/` with `main.tf` only | `terraform plan` shows 0 changes after apply |
+| 3 | add `network.tf`, `database.tf` | The database is `available`, `PubliclyAccessible: false` |
+| 4 | add `secrets.tf` | `aws ssm get-parameters-by-path --path /yourapp/staging` lists them (values stay encrypted unless you add `--with-decryption`) |
+| 5 | add `github_ci.tf` (without the deploy statements), set GitHub secrets and variables, push | An image tagged with the commit SHA is in ECR |
+| 6 | add `app.tf` and the deploy statements; set `ECS_CLUSTER` and `STAGING_URL`; push | The deploy job is green, and the URL works through HTTPS |
+
+You *can* apply everything at once. Doing it in steps means that when something fails, there are only a few new things it can be.
+
+### 9. Then production
+
+Production is a sibling folder, `infra/production/`, with its own state key (`production/terraform.tfstate`) and these differences:
+
+| Setting | Staging | Production |
+|---|---|---|
+| `multi_az` | `false` | `true` |
+| `deletion_protection` | `false` | `true` |
+| `backup_retention_period` | 1–7 | 14–35, plus a tested restore (part 1, 2.7) |
+| App tasks (`DESIRED_COUNT`) | 1 | At least 2, in different AZs |
+| `DEV_LOGIN`, site password | On | **Off**: real authentication (Chapter 7) |
+| HTTPS | `*.cloudfront.net` | Your domain: an ACM certificate on CloudFront (it must be issued in `us-east-1`) and on the load balancer |
+| Network | Default VPC | Your own VPC with private subnets (Chapter 4) |
+| Deploy | On every push to `main` | After staging, with an approval (a GitHub environment with required reviewers) |
+| AWS account | Shared | Ideally a separate account (Chapter 13) |
+
+Copying folders duplicates code. Once two environments exist, turn the shared parts into a module (`modules/ecs_app`) that both folders call with different inputs. That's Chapter 4's job, and the right moment for it is when the second copy appears, not before.
+
+---
+
+## 2B.15 By stage and product type
 
 ### By stage
 
@@ -1248,7 +1437,7 @@ What's deliberately **not** here, and would be in production:
 
 ---
 
-## 2B.15 Checklist
+## 2B.16 Checklist
 
 Staging on a cloud provider is ready when:
 

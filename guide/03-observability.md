@@ -372,6 +372,29 @@ Most tools now do everything: Sentry offers tracing, logs, metrics and profiling
 | Errors | Sentry | — |
 | Profiling | Nothing yet | Sentry profiling (usage-billed after the trial) |
 
+### Setting up Sentry, step by step
+
+What it looked like in October 2026; Sentry's screens change, the decisions don't.
+
+1. **Create an account** at sentry.io and a project with the platform **Python → FastAPI**.
+2. **Choose "Set up manually".** Sentry also offers *"Set up with your coding agent"*: a plugin that lets an AI coding tool edit your project for you. Fine for a quick start, but for a production codebase you want to write and review the setup yourself, so it follows your configuration and secrets patterns. You can skip "connect a repo" for now.
+3. **The product checkboxes** ("What do you want to track?") mostly shape Sentry's onboarding screens; what's actually sent is decided by the SDK settings in your code. New accounts get unlimited volume for 14 days, then the free plan's limits apply. Ledgerline's choices:
+
+   | Product | Use? | Why |
+   |---|---|---|
+   | Error monitoring | Yes | What Sentry is best at |
+   | Tracing | No (`traces_sample_rate=0`) | OpenTelemetry's job; one tool per signal |
+   | Logging | No | Logs go to the platform; a second copy at a third party doubles cost and exposure |
+   | Profiling | No | **Usage-based billing after the trial.** Sentry's sample snippet sets `profile_session_sample_rate=1.0`: that's how surprise bills start |
+   | Application metrics | No | OpenTelemetry's job |
+
+4. **Don't paste Sentry's sample snippet as it is.** It hard-codes the DSN and turns on 100% tracing and profiling. Use your own configuration (above), with the DSN from the environment.
+5. **Find the DSN** under **Settings → Projects → (project) → Client Keys (DSN)**. Locally it goes in `.env` (git-ignored) as `SENTRY_DSN=…`; on AWS in Parameter Store (part 2). The DSN only allows *sending* events, so it isn't a password, but keep it out of git and chats anyway: anyone with it can fill your quota with junk. If one leaks, generate a new key on the same page and disable the old one.
+6. **Check it works** with the deliberate-error route (section 3.18), and find the issue's `request_id` and `otel_trace_id` tags.
+7. **Default alerts:** Sentry emails you when a new issue appears. Keep that on.
+
+If your test suite ran with `SENTRY_DSN` set before you isolated tests from the environment (section 3.7), Sentry will contain issues from test runs. Mark them *Resolved*.
+
 ---
 
 ## 3.9 Observability for AI systems
@@ -582,16 +605,40 @@ cd ledgerline
 # optional: add SENTRY_DSN=… to .env for error tracking
 docker compose build
 docker compose up -d
+docker compose ps                      # db healthy, migrate exited (0), api and otel-lgtm running
 docker compose run --rm api pytest -q
 ```
+
+The first build reinstalls dependencies and the first `up` pulls the Grafana image (several hundred MB): expect several minutes each, once.
+
+> **Port already in use?** *"Bind for 0.0.0.0:8000 failed: port is already allocated"* means something else on your machine uses that port. Change only the host side in `docker-compose.yml` (`"8007:8000"`) and use `http://localhost:8007`; the app inside the container still listens on 8000. On Windows, `netstat -ano | findstr :8000` shows which process has it.
 
 Then:
 
 1. **Correlated logs.** Log in at the app, upload an invoice, and read `docker compose logs api --tail 20`. Find the upload's access line and the "Extraction finished" line, and check they share a `request_id`. Send your own ID with `curl -H "X-Request-ID: my-test-1" http://localhost:8000/livez -i` and see it returned.
-2. **Traces.** Open Grafana at `http://localhost:3000` → **Explore** → **Tempo** → **Search**. Open the `POST /invoices` trace, follow the link to its `extract_invoice` trace, and find the LLM span's tokens and cost and the SQL statements (with placeholders, not values).
+2. **Traces.** Grafana's home page is only a welcome screen; the data is under **Explore**. Open `http://localhost:3000` (no login) → **Explore** (left menu) → data source **Tempo** (top) → **Search** → **Run query**. Open the `POST /invoices` trace (a waterfall of dependencies, the endpoint and SQL spans), then the separate `extract_invoice` trace: its **Links** point back to the upload, and its `generate_content …` span carries the model, tokens and cost. SQL spans show statements with placeholders, never values.
 3. **Metrics.** In **Explore → Prometheus**, query `ledgerline_invoices_extracted_total` and `histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket[5m])))`. Note how OTel names become Prometheus names: dots become underscores, and units and `_total` are added.
-4. **Errors.** Visit `/_debug/error`. In Sentry, open the new issue, find its `request_id` and `otel_trace_id` tags, and look both up in logs and Tempo.
-5. **Break it on purpose.** Stop the observability container (`docker compose stop otel-lgtm`), use the app, and read the API logs. The app keeps working; the exporter reports it can't send. Telemetry must never take the app down.
+4. **Errors.** Visit `/_debug/error`. The browser shows only **"Internal Server Error"**: that's correct, the route fails on purpose and users never see details. The useful output is elsewhere: in the logs, an access line `GET /_debug/error 500` and an `ERROR` line with the stack trace, both with the same `request_id`; in Sentry, a new `RuntimeError` issue with `request_id` and `otel_trace_id` tags. Look the trace ID up in Tempo.
+5. **Break it on purpose.** Stop the observability container (`docker compose stop otel-lgtm`), use the app, and read the API logs. The app keeps working; the exporter reports it can't send. Telemetry must never take the app down. `docker compose start otel-lgtm` to restore it.
+
+The first few lines of `docker compose logs api` are plain text ("Will watch for changes…"): that's Uvicorn's file watcher, a separate process used only by `--reload` in development. Everything from the app itself is JSON.
+
+### Configuration reference
+
+Everything observability-related is configured from the environment, and is off when unset:
+
+| Variable | Example | Effect |
+|---|---|---|
+| `LOG_FORMAT` | `json` (default) or `text` | JSON for machines; text is easier to read in a terminal |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-lgtm:4318` (local), `http://localhost:4318` (AWS sidecar) | Turns trace and metric export on |
+| `OTEL_SERVICE_NAME` | `ledgerline` | The service name on every span and metric |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | `parentbased_traceidratio`, `0.1` | Keep 10% of traces (default: all) |
+| `OTEL_EXPORTER_OTLP_HEADERS` | `api-key=…` | For hosted backends that need a key |
+| `SENTRY_DSN` | `https://…ingest.sentry.io/…` | Turns error tracking on; anything that isn't an `https://` URL is treated as off |
+| `GIT_SHA` | set at image build | Becomes `service.version` on telemetry and the Sentry `release` |
+| `APP_ENV` | `development`, `staging` | Becomes `deployment.environment.name` and the Sentry `environment` |
+
+Tests remove the telemetry variables before importing the app (`tests/conftest.py`), so a test run never sends anything anywhere.
 
 **Next in this chapter:** part 2 takes this to staging on AWS: an OpenTelemetry collector alongside the app, a CloudWatch dashboard, alarms for the SLOs above that email you, an external uptime check, and the Sentry DSN in Parameter Store — all in Terraform.
 

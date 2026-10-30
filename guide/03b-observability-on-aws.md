@@ -19,10 +19,11 @@ Everything here reflects AWS as of October 2026. CloudWatch's OpenTelemetry supp
 - [3B.9 Dashboard and saved queries](#3b9-dashboard-and-saved-queries)
 - [3B.10 Doing it](#3b10-doing-it)
 - [3B.11 Runbooks](#runbooks)
-- [3B.12 Pausing without false alarms](#3b12-pausing-without-false-alarms)
-- [3B.13 Cost](#3b13-cost)
-- [3B.14 Troubleshooting](#3b14-troubleshooting)
-- [3B.15 Checklist](#3b15-checklist)
+- [3B.12 Configuring and extending](#3b12-configuring-and-extending)
+- [3B.13 Pausing without false alarms](#3b13-pausing-without-false-alarms)
+- [3B.14 Cost](#3b14-cost)
+- [3B.15 Troubleshooting](#3b15-troubleshooting)
+- [3B.16 Checklist](#3b16-checklist)
 
 ---
 
@@ -273,52 +274,107 @@ Logs Insights charges per GB scanned. At staging volumes that's fractions of a c
 
 ## 3B.10 Doing it
 
+Commands are PowerShell; in bash, replace the `@aws` splat with `--profile ledgerline --region ap-southeast-2`. If staging is paused, resume it first (section 3B.13), and if AWS answers *"session has expired"* or Terraform says *"No valid credential sources found"*, run `aws login --profile ledgerline` again: sessions last about 12 hours.
+
+```powershell
+$aws = @('--profile','ledgerline','--region','ap-southeast-2')   # reused below
+```
+
 **1. Your alert email.** It goes in a git-ignored file, not in code:
 
 ```powershell
 cd ledgerline\infra\staging
-copy terraform.tfvars.example terraform.tfvars    # then edit: alert_email = "you@example.com"
+copy terraform.tfvars.example terraform.tfvars    # then EDIT it: alert_email = "you@example.com"
 ```
 
-**2. Apply.** The plan adds about 30 resources and changes the app task definition (sidecar, memory, Sentry). The new `archive` provider needs `init` first:
+`copy` only creates the file; Terraform will happily subscribe `you@example.com` if you forget to edit it.
+
+**2. Plan and apply.** The new `archive` provider (it zips the canary script) needs `init -upgrade` first:
 
 ```powershell
 terraform init "-backend-config=backend.hcl" -upgrade
 terraform plan
-terraform apply
 ```
 
-**3. Confirm the email subscription.** AWS sends *"AWS Notification - Subscription Confirmation"*. Click the link. Until you do, alarms can't reach you.
+Ledgerline's plan read **`Plan: 36 to add, 1 to change, 1 to destroy`**. Before applying, check what the destroy and change are:
+
+```powershell
+terraform plan -no-color | Select-String "must be replaced|will be destroyed|will be updated"
+```
+
+- `aws_ecs_task_definition.app` **must be replaced**: task definitions are immutable, so any change registers a new revision and retires the old one. That's the "1 destroy" (and one of the 36 adds). Safe: the running service keeps its revision until the next deploy.
+- `aws_iam_role_policy.task_execution_secrets` **updated in place**: it can now read the Sentry parameter.
+
+Anything else being destroyed or replaced, especially the database or a bucket, is a reason to stop and understand why. Then `terraform apply`.
+
+**3. Confirm the email subscription.** AWS sends *"AWS Notification - Subscription Confirmation"* (check spam). Click the link. Until you do, alarms reach nobody:
+
+```powershell
+$topic = terraform output -raw alerts_topic_arn
+aws sns list-subscriptions-by-topic --topic-arn $topic --query "Subscriptions[].SubscriptionArn" @aws
+# a long ARN = confirmed; "PendingConfirmation" = not yet
+```
 
 **4. Turn on Transaction Search** (once per account and region):
 
 ```powershell
-aws xray update-trace-segment-destination --destination CloudWatchLogs --profile ledgerline --region ap-southeast-2
-aws xray get-trace-segment-destination --profile ledgerline --region ap-southeast-2
+aws xray update-trace-segment-destination --destination CloudWatchLogs @aws    # Status: PENDING
+aws xray get-trace-segment-destination @aws                                   # ~10 minutes later: ACTIVE
 ```
+
+While it's `PENDING`, running the update again fails with *"Updates are not allowed while the current status is PENDING"*. That only means the first one is still being applied.
 
 **5. Set the Sentry DSN:**
 
 ```powershell
-aws ssm put-parameter --name /ledgerline/staging/sentry_dsn --type SecureString --overwrite --value "<your DSN>" --profile ledgerline --region ap-southeast-2
+aws ssm put-parameter --name /ledgerline/staging/sentry_dsn --type SecureString --overwrite --value "https://…your DSN…" @aws
 ```
 
-**6. Deploy.** Task definition changes take effect on the next deploy (Chapter 2's split: Terraform defines *how*, CI decides *which image*). Push the code changes, or an empty commit.
+Each `put-parameter --overwrite` creates a new **version**; containers read the latest version when they start. Paste the real value: setting the literal text `<your DSN>` is valid as far as AWS is concerned, and the app will just log *"SENTRY_DSN is not a URL"* and run without Sentry.
 
-**7. Check each signal:**
+**6. Deploy.** Task definition changes and new parameter values take effect on the next deploy (Chapter 2's split: Terraform defines *how*, CI decides *which image*). Push the code changes, or `git commit --allow-empty -m "Redeploy"; git push`, then `gh run watch`.
 
-| Signal | How to check |
+**7. Check each signal.** First make some traffic: open the staging URL (`terraform output -raw staging_url`), enter the site password, log in, **upload an invoice**, and open `/_debug/error` once (it shows "Internal Server Error", as it should).
+
+```powershell
+# Logs: JSON from the app; the agent's own output should show no repeated errors
+aws logs tail /ecs/ledgerline-staging --since 15m --log-stream-name-prefix app @aws
+aws logs tail /ecs/ledgerline-staging --since 15m --log-stream-name-prefix cwagent @aws
+
+# Traces: spans arrive in the aws/spans log group
+aws logs filter-log-events --log-group-name aws/spans --filter-pattern '"extract_invoice"' --max-items 2 --query "events[].message" @aws
+
+# Metrics from logs (appear a few minutes after matching lines)
+aws cloudwatch list-metrics --namespace Ledgerline/Staging --query "Metrics[].MetricName" @aws
+
+# Alarms: OK, or INSUFFICIENT_DATA for the first hour
+aws cloudwatch describe-alarms --alarm-name-prefix ledgerline-staging --query "MetricAlarms[].[AlarmName,StateValue]" --output table @aws
+
+# Uptime canary: PASSED every 15 minutes; StateReason explains a failure
+aws synthetics get-canary-runs --name ll-staging-uptime --max-results 3 --query "CanaryRuns[].[Status.State,Status.StateReason,Timeline.Started]" --output table @aws
+
+# Dashboard
+start (terraform output -raw dashboard_url)
+```
+
+In the console:
+
+| Signal | Where |
 |---|---|
-| Logs | CloudWatch → Log groups → `/ecs/ledgerline-staging`: JSON lines in `app/…` streams; agent output in `cwagent/…` |
-| Traces | Use the site (log in, upload an invoice). After a few minutes: CloudWatch → **Transaction Search**, search for `extract_invoice` |
-| OTel metrics | CloudWatch → **Query Studio** (PromQL): try `ledgerline_invoices_extracted_total` or search for the metric name |
-| Log metrics | CloudWatch → Metrics → `Ledgerline/Staging` (only after new matching log lines) |
-| Alarms | CloudWatch → Alarms: all should move from *Insufficient data* to *OK* within an hour |
-| Uptime | CloudWatch → Synthetics → `ll-staging-uptime`: passing runs every 15 minutes |
-| Errors | Visit `/_debug/error` on the staging URL (after the site password); the issue appears in Sentry with `environment: staging` |
-| Alerts | Optional: run `aws ecs update-service ... --desired-count 0` and wait. You should get the `no-healthy-targets` and `uptime` emails, then OK emails after scaling back to 1 |
+| Traces | CloudWatch → **Transaction Search**: search `extract_invoice`, open a trace, find the LLM span and its link back to the upload |
+| OTel metrics | CloudWatch → **Query Studio** (PromQL): search for `ledgerline` |
+| Errors | Sentry → Issues: the `RuntimeError` with `environment: staging`, `release` = the deployed git SHA |
 
-The last row is a **fire drill**: an alert you've never seen fire is an alert you don't know works.
+**8. Fire drill (optional, ~30 minutes).** An alert you've never seen fire is an alert you don't know works:
+
+```powershell
+aws ecs update-service --cluster ledgerline-staging --service ledgerline-staging-app --desired-count 0 @aws
+# ~5 min: "ALARM: ledgerline-staging-no-healthy-targets" email; ~30 min: "...-uptime"
+aws ecs update-service --cluster ledgerline-staging --service ledgerline-staging-app --desired-count 1 @aws
+# a few minutes later: "OK" emails
+```
+
+> **Worked example: the canary's first run failed, and that was good news.** Ledgerline's first canary run failed at 21:46 with *"returned 503: 503 Service Temporarily Unavailable"*, an HTML page from the **load balancer**: staging had just been resumed and no app task was healthy yet. `StateReason` showed it immediately; `curl.exe https://…/readyz` returned 200 a few minutes later, and the following runs (including a manual one, `aws synthetics start-canary-dry-run --name ll-staging-uptime`) passed. The first failure proved the whole chain (script, runtime, permissions, metric) works; a check that has only ever passed hasn't proved that. It also showed why resuming staging should start the canary *after* the deploy (section 3B.13).
 
 ---
 
@@ -367,7 +423,99 @@ Short on purpose. Each alarm's description links here.
 
 ---
 
-## 3B.12 Pausing without false alarms
+## 3B.12 Configuring and extending
+
+### Terraform variables
+
+Set them in `terraform.tfvars` (git-ignored; start from `terraform.tfvars.example`) or with `-var name=value`:
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `alert_email` | *(required)* | Where alarm notifications go |
+| `alarms_enabled` | `true` | `false` silences all alarm notifications (alarms still change state) |
+| `llm_cost_alarm_usd_per_hour` | `1` | Threshold for the LLM spend alarm |
+| `cloudwatch_agent_image` | `…/cloudwatch-agent:latest` | The sidecar image; pin a version or digest once it works |
+| `llm_provider` | `fake` | `gemini` once the API key is in Parameter Store |
+
+Thresholds that aren't variables (SLO targets, burn rates, minimum request counts, the canary schedule) are plain values in [`observability.tf`](../ledgerline/infra/staging/observability.tf), each with a comment explaining it. Changing them is a reviewed code change, which is what you want for the definition of "broken".
+
+> **Gitignore comments go on their own line.** `terraform.tfvars   # personal values` in `.gitignore` is *not* a pattern plus a comment: Git treats the whole line, spaces and `#` included, as the pattern, and ignores nothing. Check any ignore rule with `git check-ignore -v <path>`.
+
+### Recipes
+
+**Another email recipient.** Add a subscription; each recipient confirms their own:
+
+```hcl
+resource "aws_sns_topic_subscription" "oncall_email" {
+  topic_arn = aws_sns_topic.alerts.arn
+  protocol  = "email"
+  endpoint  = "oncall@example.com"
+}
+```
+
+**Slack or Microsoft Teams.** AWS's chat integration (*Amazon Q Developer in chat applications*, formerly AWS Chatbot) subscribes a channel to the same SNS topic. Authorise the workspace once in its console, then manage the channel in Terraform (`aws_chatbot_slack_channel_configuration` with `sns_topic_arns = [aws_sns_topic.alerts.arn]`). Alternatives: a paging tool's email or webhook integration (PagerDuty, incident.io), subscribed the same way.
+
+**A new metric from logs, with an alarm.** Log a structured line with an `event` field, then match it:
+
+```hcl
+resource "aws_cloudwatch_log_metric_filter" "approvals" {
+  name           = "invoices-approved"
+  log_group_name = aws_cloudwatch_log_group.app.name
+  pattern        = "{ $.event = \"invoice_approved\" }"
+  metric_transformation {
+    namespace     = local.metric_namespace
+    name          = "InvoicesApproved"
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "no_approvals" {
+  alarm_name          = "${local.name}-no-approvals-today"
+  alarm_description   = "No invoices approved in 24 hours on a working day. Is the review screen broken?"
+  namespace           = local.metric_namespace
+  metric_name         = "InvoicesApproved"
+  statistic           = "Sum"
+  period              = 86400
+  evaluation_periods  = 1
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  treat_missing_data  = "breaching"
+  actions_enabled     = var.alarms_enabled
+  alarm_actions       = local.alarm_actions
+}
+```
+
+Absence alarms like this ("nothing happened when something should have") catch failures that produce no errors at all.
+
+**Test a pattern before deploying it:**
+
+```powershell
+aws logs test-metric-filter --filter-pattern '{ $.event = "extraction_finished" }' --log-event-messages '{"event":"extraction_finished","outcome":"needs_review","duration_ms":412}' @aws
+```
+
+**Canary frequency.** Change `rate(15 minutes)` in `aws_synthetics_canary.uptime`. Cost is per run (~$0.0012): every 5 minutes is about $10 a month.
+
+**More of the trace index.** 1% of spans are indexed for free; all spans are stored regardless. To index more:
+
+```powershell
+aws xray update-indexing-rule --name Default --rule '{\"Probabilistic\": {\"DesiredSamplingPercentage\": 10}}' @aws
+```
+
+**A saved query.** Copy an `aws_cloudwatch_query_definition` block; the name's `/` makes a folder in the console.
+
+**Pin the agent image.** After a deploy that works, find the digest that ran and set `cloudwatch_agent_image` to `public.ecr.aws/cloudwatch-agent/cloudwatch-agent@sha256:…`:
+
+```powershell
+$task = aws ecs list-tasks --cluster ledgerline-staging --query "taskArns[0]" --output text @aws
+aws ecs describe-tasks --cluster ledgerline-staging --tasks $task --query "tasks[0].containers[?name=='cloudwatch-agent'].imageDigest" --output text @aws
+```
+
+**Silence everything for a while.** `terraform apply -var alarms_enabled=false`, or the CLI commands in 3B.13.
+
+---
+
+## 3B.13 Pausing without false alarms
 
 Pausing staging (Chapter 2) now has two more steps. Otherwise the uptime and healthy-target alarms correctly report that the site is down, every time.
 
@@ -394,7 +542,7 @@ Logs Insights queries, dashboards and the SNS topic cost nothing while paused. T
 
 ---
 
-## 3B.13 Cost
+## 3B.14 Cost
 
 Approximate monthly additions for staging (Sydney, October 2026; check the CloudWatch pricing page):
 
@@ -412,7 +560,7 @@ The numbers that would grow in production: **log volume** (every request writes 
 
 ---
 
-## 3B.14 Troubleshooting
+## 3B.15 Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
@@ -424,10 +572,14 @@ The numbers that would grow in production: **log volume** (every request writes 
 | Canary fails but the site works | Runtime or packaging issue, or staging paused | Synthetics → canary → run logs. A paused staging fails by design |
 | Sentry shows nothing from staging | DSN still `not-set` (the app logs a warning), or not redeployed since setting it | Set the parameter, then deploy |
 | `terraform plan` fails on the runtime data source or archive | Providers not upgraded | `terraform init -upgrade` |
+| *"session has expired"* / *"No valid credential sources found"* | The `aws login` session (about 12 hours) ended | `aws login --profile ledgerline`, then rerun |
+| *"Updates are not allowed while the current status is PENDING"* | Transaction Search is still being enabled | Wait ~10 minutes; `aws xray get-trace-segment-destination` |
+| The canary's first run failed with an HTML 503 | No healthy task at that moment (staging starting or paused); the 503 page is the load balancer's | `curl.exe …/readyz`; `aws synthetics start-canary-dry-run --name ll-staging-uptime`; start the canary after deploys when resuming |
+| An alarm email you didn't expect after resuming | Alarms correctly saw the downtime | Follow 3B.13's order: alarms back on last |
 
 ---
 
-## 3B.15 Checklist
+## 3B.16 Checklist
 
 Staging is observable when:
 
