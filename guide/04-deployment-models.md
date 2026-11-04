@@ -350,7 +350,7 @@ What the table hides:
 
 ## 4.13 Demo
 
-Part 2, [Deployment models in practice](04b-deployment-demos.md), runs the same Ledgerline image four more ways:
+[Part 2, Deployment models in practice](04b-deployment-demos.md), runs the same Ledgerline image four more ways:
 
 1. **Kubernetes, locally with kind:** namespaces, Deployments, a migration Job, probes, Secrets. Free.
 2. **A single VM:** EC2 with Docker Compose and Caddy, created and destroyed with Terraform.

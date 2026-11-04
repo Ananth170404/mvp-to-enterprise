@@ -41,11 +41,13 @@ Everything here reflects AWS as of October 2026. CloudWatch's OpenTelemetry supp
   app ──errors──▶ Sentry (its own alerts)
 ```
 
+Since Chapter 4 these files are in the shared environment module (`infra/modules/environment/`), used by staging and production; the account-wide Transaction Search policy is in `infra/staging/shared.tf`.
+
 | Piece | Where it lives | Purpose |
 |---|---|---|
-| CloudWatch agent sidecar | [`app.tf`](../ledgerline/infra/staging/app.tf) | Receives OpenTelemetry from the app and forwards it to CloudWatch |
-| Sentry DSN parameter | [`secrets.tf`](../ledgerline/infra/staging/secrets.tf) | Error tracking on staging |
-| Everything else | [`observability.tf`](../ledgerline/infra/staging/observability.tf) | Alerts, log metrics, alarms, canary, dashboard, saved queries, the Transaction Search policy |
+| CloudWatch agent sidecar | [`app.tf`](../ledgerline/infra/modules/environment/app.tf) | Receives OpenTelemetry from the app and forwards it to CloudWatch |
+| Sentry DSN parameter | [`secrets.tf`](../ledgerline/infra/modules/environment/secrets.tf) | Error tracking on staging |
+| Everything else | [`observability.tf`](../ledgerline/infra/modules/environment/observability.tf) | Alerts, log metrics, alarms, canary, dashboard, saved queries, the Transaction Search policy |
 | Two log lines | [`app/extraction.py`](../ledgerline/app/extraction.py) | One structured line per LLM call and per extraction, for log-based metrics |
 
 ---
@@ -437,7 +439,7 @@ Set them in `terraform.tfvars` (git-ignored; start from `terraform.tfvars.exampl
 | `cloudwatch_agent_image` | `…/cloudwatch-agent:latest` | The sidecar image; pin a version or digest once it works |
 | `llm_provider` | `fake` | `gemini` once the API key is in Parameter Store |
 
-Thresholds that aren't variables (SLO targets, burn rates, minimum request counts, the canary schedule) are plain values in [`observability.tf`](../ledgerline/infra/staging/observability.tf), each with a comment explaining it. Changing them is a reviewed code change, which is what you want for the definition of "broken".
+Thresholds that aren't variables (SLO targets, burn rates, minimum request counts, the canary schedule) are plain values in [`observability.tf`](../ledgerline/infra/modules/environment/observability.tf), each with a comment explaining it. Changing them is a reviewed code change, which is what you want for the definition of "broken".
 
 > **Gitignore comments go on their own line.** `terraform.tfvars   # personal values` in `.gitignore` is *not* a pattern plus a comment: Git treats the whole line, spaces and `#` included, as the pattern, and ignores nothing. Check any ignore rule with `git check-ignore -v <path>`.
 

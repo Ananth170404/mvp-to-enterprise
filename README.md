@@ -27,7 +27,7 @@ Developers who can build an MVP and want to understand what comes next: reliabil
 | 1 | [The honest MVP](guide/01-honest-mvp.md) | Draft |
 | 2 | [Production readiness](guide/02-production-readiness.md) — and part 2: [Staging on AWS with Terraform](guide/02b-staging-on-aws.md) | Draft |
 | 3 | [Observability](guide/03-observability.md) — and part 2: [Observability on AWS](guide/03b-observability-on-aws.md) | Draft |
-| 4 | [Deployment models and infrastructure](guide/04-deployment-models.md) | Draft (demos in progress) |
+| 4 | [Deployment models and infrastructure](guide/04-deployment-models.md) — and part 2: [Deployment models in practice](guide/04b-deployment-demos.md) | Draft |
 | 5 | The data layer | Planned |
 | 6 | Architecture evolution | Planned |
 | 7 | Auth, identity and multi-tenancy | Planned |

@@ -306,6 +306,8 @@ ledgerline/infra/
     └── .terraform.lock.hcl  Provider versions (created by init; committed)
 ```
 
+> **Since Chapter 4**, the files that describe one environment (`network.tf`, `database.tf`, `secrets.tf`, `app.tf`, and Chapter 3's `observability.tf`) live in a reusable module, [`infra/modules/environment/`](../ledgerline/infra/modules/environment/), shared by staging and production. `staging/` keeps the providers, the default-VPC lookup, one `module "env"` call, the CI identity (`github_ci.tf`), account-wide pieces such as the image registry (`shared.tf`), and `moved.tf`. The content explained in this chapter is the same; only the file locations changed. The move itself is in [Chapter 4, part 2](04b-deployment-demos.md#4b5-production-and-promoting-a-release).
+
 Three things to know about this layout:
 
 1. **Every `.tf` file in a folder is part of one configuration.** Terraform reads them all together, in no particular order. The split into `network.tf`, `database.tf` and so on is purely for people, and `app.tf` can refer to `aws_db_instance.main` from `database.tf` freely. A good rule: one file per concern, named after it.
@@ -397,7 +399,7 @@ terraform init -backend-config=backend.hcl
 
 ### The container registry (ECR)
 
-From [`staging/main.tf`](../ledgerline/infra/staging/main.tf):
+From [`staging/shared.tf`](../ledgerline/infra/staging/shared.tf) (originally `staging/main.tf`):
 
 ```hcl
 resource "aws_ecr_repository" "app" {
@@ -452,7 +454,7 @@ terraform apply
 
 A **VPC** is your private network in AWS, and **subnets** are its slices, one per availability zone (AZ, a separate data centre). Every account comes with a *default VPC* whose subnets are **public**: resources in them *can* have internet addresses.
 
-[`staging/network.tf`](../ledgerline/infra/staging/network.tf) uses the default VPC rather than building one:
+[`staging/network.tf`](../ledgerline/infra/modules/environment/network.tf) uses the default VPC rather than building one:
 
 | | Default VPC (this staging) | Custom VPC with private subnets (production, Chapter 4) |
 |---|---|---|
@@ -486,7 +488,7 @@ Each group allows only the one before it.
 
 ### The database
 
-[`staging/database.tf`](../ledgerline/infra/staging/database.tf), the decisions that matter:
+[`staging/database.tf`](../ledgerline/infra/modules/environment/database.tf), the decisions that matter:
 
 | Setting | Value | Why |
 |---|---|---|
@@ -571,7 +573,7 @@ Terraform 1.11+ has two features that together fix this:
 - **Ephemeral resources** produce a value during one run that is never written to state or plan files.
 - **Write-only arguments** (names ending in `_wo`) are sent to the provider and never stored. Because Terraform can't see the stored value, you tell it when to send a new one, by changing a version number.
 
-[`staging/secrets.tf`](../ledgerline/infra/staging/secrets.tf):
+[`staging/secrets.tf`](../ledgerline/infra/modules/environment/secrets.tf):
 
 ```hcl
 ephemeral "random_password" "app_db" {
@@ -891,7 +893,7 @@ Both trust `ecs-tasks.amazonaws.com`, limited to this account with `aws:SourceAc
 
 ### The task definitions
 
-From [`staging/app.tf`](../ledgerline/infra/staging/app.tf), the app container:
+From [`modules/environment/app.tf`](../ledgerline/infra/modules/environment/app.tf) (originally `staging/app.tf`), the app container:
 
 ```hcl
 container_definitions = jsonencode([{
@@ -1293,13 +1295,13 @@ Search the copied `infra/` folder for `ledgerline`. These are all the places, an
 
 | File | Value | Change to |
 |---|---|---|
-| `bootstrap/main.tf`, `staging/main.tf` | `default_tags { project = "ledgerline" }` | Your project name (shows in cost reports) |
+| `bootstrap/main.tf`, `staging/main.tf`, `production/main.tf` | `default_tags { project = "ledgerline" }` | Your project name (shows in cost reports) |
 | `bootstrap/main.tf` | `state_bucket = "ledgerline-tfstate-${account_id}"` | `yourapp-tfstate-${account_id}` |
-| `staging/main.tf` | `local.name = "ledgerline-${var.environment}"` | `yourapp-${var.environment}`. This prefixes nearly every resource name: cluster, service, database, roles, buckets |
-| `staging/main.tf` | `aws_ecr_repository.app.name = "ledgerline"` | Your image name. Also change it in the CI push step (`…/ledgerline:${{ github.sha }}`) |
-| `staging/secrets.tf` | `ssm_prefix = "/ledgerline/${var.environment}"` | `/yourapp/${var.environment}` |
-| `staging/database.tf` | `db_name`, `username = "ledgerline"` | Your database name and owner user |
-| `staging/app.tf` | `DB_USER = "ledgerline_app"` | Your app's restricted database user, or remove it if you use one user (not recommended, see part 1, 2.3) |
+| `modules/environment/versions.tf` | `local.name = "ledgerline-${var.environment}"` | `yourapp-${var.environment}`. This prefixes nearly every resource name: cluster, service, database, roles, buckets |
+| `staging/shared.tf` (and `data "aws_ecr_repository"` in `production/main.tf`) | `aws_ecr_repository.app.name = "ledgerline"` | Your image name. Also change it in the CI push step (`…/ledgerline:${{ github.sha }}`) |
+| `modules/environment/secrets.tf` | `ssm_prefix = "/ledgerline/${var.environment}"` | `/yourapp/${var.environment}` |
+| `modules/environment/database.tf` | `db_name`, `username = "ledgerline"` | Your database name and owner user |
+| `modules/environment/app.tf` | `DB_USER = "ledgerline_app"` | Your app's restricted database user, or remove it if you use one user (not recommended, see part 1, 2.3) |
 | `*/main.tf` | `variable "region"`, `variable "aws_profile"` | Your region and the profile name you used with `aws login` |
 | `staging/backend.hcl` | `bucket`, `region`, `profile` | Your state bucket (output of bootstrap) |
 
