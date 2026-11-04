@@ -53,6 +53,18 @@ variable "cloudwatch_agent_image" {
   default     = "public.ecr.aws/cloudwatch-agent/cloudwatch-agent:latest"
 }
 
+variable "dev_login" {
+  description = "The demo 'pick a user' login. The app refuses it when APP_ENV=production."
+  type        = bool
+  default     = true
+}
+
+variable "seed_demo_data" {
+  description = "Load demo tenants and users on every migration. Never in production (the app refuses)."
+  type        = bool
+  default     = true
+}
+
 # ---------------------------------------------------------------- database
 
 variable "free_plan" {

@@ -161,7 +161,9 @@ resource "aws_ecs_task_definition" "app" {
 
     environment = concat(local.common_environment, [
       { name = "LLM_PROVIDER", value = var.llm_provider },
-      { name = "DEV_LOGIN", value = "true" }, # demo login; requires SITE_PASSWORD (enforced by the app)
+      # Demo login: pick any seeded user. Staging only; the app refuses it in
+      # production (app/config.py), where real authentication arrives in Chapter 7.
+      { name = "DEV_LOGIN", value = var.dev_login ? "true" : "false" },
       # OpenTelemetry: the same variables as local development, a different address.
       { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://localhost:4318" },
       { name = "OTEL_SERVICE_NAME", value = "ledgerline" },
@@ -246,12 +248,18 @@ resource "aws_ecs_task_definition" "migrate" {
     image     = local.template_image
     essential = true
     # 1. schema changes, as the owner  2. create/refresh the restricted app user
-    # 3. demo tenants and users for the dev login (refuses in production)
-    command = ["sh", "-c", "alembic upgrade head && python -m app.db_roles && python -m app.seed"]
+    # 3. demo tenants and users for the dev login (staging only; app.seed refuses
+    #    in production, so production doesn't run it)
+    command = ["sh", "-c", join(" && ", concat(
+      ["alembic upgrade head", "python -m app.db_roles"],
+      var.seed_demo_data ? ["python -m app.seed"] : [],
+    ))]
 
+    # The same settings the app gets: the configuration checks in app/config.py
+    # run on import, and must pass here too (production refuses the fake LLM).
     environment = concat(local.common_environment, [
       { name = "MIGRATION_DB_USER", value = aws_db_instance.main.username },
-      { name = "LLM_PROVIDER", value = "fake" },
+      { name = "LLM_PROVIDER", value = var.llm_provider },
       { name = "DEV_LOGIN", value = "false" },
     ])
 
@@ -259,6 +267,7 @@ resource "aws_ecs_task_definition" "migrate" {
       # RDS keeps the owner's credentials as JSON; ":password::" picks one key.
       { name = "MIGRATION_DB_PASSWORD", valueFrom = "${local.db_secret_arn}:password::" },
       { name = "DB_PASSWORD", valueFrom = aws_ssm_parameter.app_db_password.arn },
+      { name = "GEMINI_API_KEY", valueFrom = aws_ssm_parameter.gemini_api_key.arn },
     ]
 
     logConfiguration = {

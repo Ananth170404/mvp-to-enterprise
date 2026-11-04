@@ -103,7 +103,14 @@ module "env" {
   assign_public_ip = false # private subnets; outbound through NAT
 
   ecr_repository_url = data.aws_ecr_repository.app.repository_url
-  llm_provider       = "fake" # until a production Gemini key is set
+
+  # Production settings the app itself enforces (app/config.py): the fake LLM
+  # and the demo login are refused when APP_ENV=production, and demo data is
+  # never seeded. Until real authentication (Chapter 7), production serves
+  # health checks and answers app pages with "Authentication is not configured".
+  llm_provider   = "gemini" # key in /ledgerline/production/gemini_api_key (placeholder until set)
+  dev_login      = false
+  seed_demo_data = false
 
   free_plan           = var.free_plan
   multi_az            = var.multi_az
