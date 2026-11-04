@@ -245,3 +245,46 @@ jobs:
         run: bash scripts/deploy_ecs.sh
       - name: Summary
         run: echo "Deployed \`${{ needs.build.outputs.image }}\` to ${{ vars.STAGING_URL }}" >> "$GITHUB_STEP_SUMMARY"
+
+  # Promotion: the SAME image, already deployed and running in staging, goes
+  # to production, but only after a human approves. The approval is a rule on
+  # the GitHub "production" environment (Settings > Environments > production >
+  # Required reviewers); this job waits for it. Production's AWS key is a secret
+  # of that environment, so no other job can read it.
+  deploy-production:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build, deploy-staging]
+    if: needs.build.outputs.image != '' && vars.PRODUCTION_ECS_CLUSTER != ''
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          # Distinct names: if the environment secrets were missing, the job
+          # fails instead of quietly falling back to staging's credentials.
+          aws-access-key-id: ${{ secrets.PRODUCTION_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.PRODUCTION_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Migrate, then roll out the tested image
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}
+          CLUSTER: ${{ vars.PRODUCTION_ECS_CLUSTER }}
+          DESIRED_COUNT: "2" # one task per availability zone
+        run: bash scripts/deploy_ecs.sh
+      - name: Production answers through its public address
+        run: |
+          for _ in $(seq 1 12); do
+            curl -fsS "${{ vars.PRODUCTION_URL }}/readyz" && exit 0
+            sleep 10
+          done
+          echo "::error::${{ vars.PRODUCTION_URL }}/readyz did not return 200"
+          exit 1
+      - name: Summary
+        run: echo "Promoted \`${{ needs.build.outputs.image }}\` to production (${{ vars.PRODUCTION_URL }})" >> "$GITHUB_STEP_SUMMARY"

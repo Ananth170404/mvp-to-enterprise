@@ -1,0 +1,21 @@
+# Ledgerline on Kubernetes (guide Chapter 4, part 2). Local demo on kind:
+#
+#   kind create cluster --name ledgerline
+#   docker build --target runtime -t ledgerline:local ../..      (from this folder)
+#   kind load docker-image ledgerline:local --name ledgerline
+#   kubectl create namespace ledgerline
+#   kubectl -n ledgerline create secret generic ledgerline-db \
+#     --from-literal=owner-password=<choose> --from-literal=app-password=<choose>
+#   kubectl apply -k .
+#
+# The Secret is created by hand, not from a file here: secrets never go in git.
+# In a real cluster they come from the cloud's secrets manager (External
+# Secrets Operator, or the CSI secrets store driver).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ledgerline
+resources:
+  - config.yaml
+  - postgres.yaml
+  - migrate-job.yaml
+  - app.yaml

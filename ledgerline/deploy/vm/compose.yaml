@@ -1,0 +1,99 @@
+# Ledgerline on a single server (guide Chapter 4, part 2).
+#
+# The same image as ECS and Kubernetes, the same order of start-up
+# (database -> migrate -> app), plus Caddy for automatic HTTPS. Values come
+# from .env, which the server generates on first boot (never committed).
+
+x-logging: &logging
+  # Without limits, container logs grow until the disk is full: a classic
+  # single-server outage. 3 x 10 MB per container.
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-app: &app
+  image: ${IMAGE}
+  logging: *logging
+  environment: &app-env
+    APP_ENV: development          # files on local disk; "staging" would require S3
+    DB_HOST: db
+    DB_NAME: ledgerline
+    DB_SSLMODE: disable           # database on the same machine, private Docker network
+    DB_USER: ledgerline_app
+    DB_PASSWORD: ${APP_DB_PASSWORD}
+    MIGRATION_DB_USER: ledgerline
+    MIGRATION_DB_PASSWORD: ${POSTGRES_PASSWORD}
+    STORAGE_BACKEND: local
+    STORAGE_DIR: /data/storage
+    LLM_PROVIDER: fake
+    DEV_LOGIN: "true"
+    SITE_PASSWORD: ${SITE_PASSWORD}  # the server is on the internet: the password gate is required
+    LOG_FORMAT: json
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_USER: ledgerline
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ledgerline
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledgerline"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Named volumes are created owned by root; the app runs as user 1000.
+  storage-permissions:
+    image: busybox:1.37
+    command: ["chown", "-R", "1000:1000", "/data/storage"]
+    volumes:
+      - storage:/data/storage
+
+  migrate:
+    <<: *app
+    command: ["sh", "-c", "alembic upgrade head && python -m app.db_roles && python -m app.seed"]
+    restart: "no"
+    depends_on:
+      db: { condition: service_healthy }
+
+  api:
+    <<: *app
+    restart: unless-stopped
+    volumes:
+      - storage:/data/storage
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      storage-permissions: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/livez', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Caddy: reverse proxy with automatic HTTPS (Let's Encrypt), renewed for you.
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - "80:80"       # certificate challenges and redirects to HTTPS
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data     # certificates: keep them, or every restart asks Let's Encrypt again
+      - caddy_config:/config
+    depends_on:
+      api: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  storage:
+  caddy_data:
+  caddy_config:

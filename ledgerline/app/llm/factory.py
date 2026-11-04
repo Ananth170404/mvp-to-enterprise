@@ -13,5 +13,5 @@ def get_provider() -> LLMProvider:
     if settings.llm_provider == "fake":
         from app.llm.fake import FakeProvider
 
-        return FakeProvider(manifest_path=settings.fake_llm_manifest)
+        return FakeProvider(manifest_path=settings.fake_llm_manifest, delay_seconds=settings.fake_llm_delay_seconds)
     raise RuntimeError(f"Unknown LLM_PROVIDER: {settings.llm_provider!r}")

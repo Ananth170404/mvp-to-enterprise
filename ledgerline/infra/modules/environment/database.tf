@@ -7,12 +7,6 @@
 # Free-plan accounts can't use every RDS option. AWS rejects the request with
 # FreeTierRestrictionError (we hit it for backup retention). Instead of
 # scattering free-plan workarounds, one switch picks safe values for either.
-variable "free_plan" {
-  description = "true while the AWS account is on the Free plan; set false after upgrading."
-  type        = bool
-  default     = true
-}
-
 locals {
   db = var.free_plan ? {
     backup_retention_days = 1     # free plan maximum
@@ -27,7 +21,7 @@ locals {
 
 resource "aws_db_subnet_group" "main" {
   name       = local.name
-  subnet_ids = data.aws_subnets.default.ids
+  subnet_ids = var.db_subnet_ids
 }
 
 resource "aws_db_instance" "main" {
@@ -53,7 +47,7 @@ resource "aws_db_instance" "main" {
   db_subnet_group_name   = aws_db_subnet_group.main.name
   vpc_security_group_ids = [aws_security_group.db.id]
   publicly_accessible    = false # no public IP, ever
-  multi_az               = false # one AZ is fine for staging; production: true
+  multi_az               = var.multi_az # staging: false; production: true (a standby in another AZ)
 
   # Backups: daily snapshots + point-in-time recovery to any second within the
   # retention window. Retention decides how FAR BACK you can restore (1 day on
@@ -66,27 +60,9 @@ resource "aws_db_instance" "main" {
 
   # Staging gets torn down to save credits, so deletion is allowed, but a
   # final snapshot is always taken first. Production: deletion_protection = true.
-  deletion_protection       = false
+  deletion_protection       = var.deletion_protection
   skip_final_snapshot       = false
   final_snapshot_identifier = "${local.name}-final"
 
   apply_immediately = true # staging: don't wait for the maintenance window
-}
-
-output "db_endpoint" {
-  description = "Hostname of the database (reachable only from inside the VPC)."
-  value       = aws_db_instance.main.address
-}
-
-output "db_master_secret_arn" {
-  description = "Secrets Manager secret holding the master (schema owner) credentials."
-  value       = aws_db_instance.main.master_user_secret[0].secret_arn
-}
-
-output "app_security_group_id" {
-  value = aws_security_group.app.id
-}
-
-output "subnet_ids" {
-  value = data.aws_subnets.default.ids
 }

@@ -14,23 +14,9 @@
 # as of October 2026 CloudWatch's OTel metric store (PromQL) is new; alarms,
 # dashboards and Terraform all fully support classic metrics. OTel metrics and
 # traces are for exploring; these are for waking you up.
-
-variable "alert_email" {
-  description = "Where alarm notifications go. Put it in terraform.tfvars (git-ignored), not in code."
-  type        = string
-}
-
-variable "alarms_enabled" {
-  description = "false silences notifications (e.g. while staging is paused). Alarms still change state."
-  type        = bool
-  default     = true
-}
-
-variable "llm_cost_alarm_usd_per_hour" {
-  description = "Alert when estimated LLM spend in one hour exceeds this."
-  type        = number
-  default     = 1
-}
+#
+# X-Ray Transaction Search is an ACCOUNT-wide setting, so its log policy lives
+# in the staging root (shared.tf), not in this per-environment module.
 
 locals {
   metric_namespace = "Ledgerline/${title(var.environment)}"
@@ -313,7 +299,7 @@ resource "aws_cloudwatch_metric_alarm" "error_logs" {
 
 # Artifacts (logs, results) of each canary run; kept 14 days.
 module "canary_artifacts" {
-  source                  = "../modules/private_bucket"
+  source                  = "../private_bucket"
   name                    = "${local.name}-canary-${local.account_id}"
   noncurrent_version_days = 1
   expire_after_days       = 14
@@ -377,7 +363,7 @@ resource "aws_iam_role_policy" "canary" {
 data "archive_file" "canary" {
   type        = "zip"
   source_file = "${path.module}/canary/uptime.js"
-  output_path = "${path.module}/.terraform/canary-uptime.zip"
+  output_path = "${path.root}/.terraform/canary-uptime-${var.environment}.zip"
 }
 
 # The newest Node.js runtime, looked up at plan time. Runtimes are deprecated
@@ -432,38 +418,10 @@ resource "aws_cloudwatch_metric_alarm" "uptime" {
   ok_actions          = local.alarm_actions
 }
 
-# ---------------------------------------------------------------- traces
-
-# Transaction Search stores every span sent to X-Ray as structured logs in the
-# aws/spans log group, and indexes 1% for free as trace summaries. X-Ray needs
-# permission to write those logs. Enabling the destination itself is a
-# one-time account setting, done with the CLI (guide 3B, step 4):
-#   aws xray update-trace-segment-destination --destination CloudWatchLogs
-resource "aws_cloudwatch_log_resource_policy" "xray_spans" {
-  policy_name = "transaction-search-xray"
-  policy_document = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Sid       = "TransactionSearchXRayAccess"
-      Effect    = "Allow"
-      Principal = { Service = "xray.amazonaws.com" }
-      Action    = "logs:PutLogEvents"
-      Resource = [
-        "arn:aws:logs:${var.region}:${local.account_id}:log-group:aws/spans:*",
-        "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/application-signals/data:*",
-      ]
-      Condition = {
-        ArnLike      = { "aws:SourceArn" = "arn:aws:xray:${var.region}:${local.account_id}:*" }
-        StringEquals = { "aws:SourceAccount" = local.account_id }
-      }
-    }]
-  })
-}
-
 # ---------------------------------------------------------------- saved queries
 
 resource "aws_cloudwatch_query_definition" "errors" {
-  name            = "Ledgerline/Errors"
+  name            = "Ledgerline/${title(var.environment)}/Errors"
   log_group_names = [aws_cloudwatch_log_group.app.name]
   query_string    = <<-EOT
     fields @timestamp, logger, message, request_id, tenant_id, trace_id
@@ -474,7 +432,7 @@ resource "aws_cloudwatch_query_definition" "errors" {
 }
 
 resource "aws_cloudwatch_query_definition" "request" {
-  name            = "Ledgerline/Everything for one request (edit the ID)"
+  name            = "Ledgerline/${title(var.environment)}/Everything for one request (edit the ID)"
   log_group_names = [aws_cloudwatch_log_group.app.name]
   query_string    = <<-EOT
     fields @timestamp, level, logger, message, http_status, duration_ms, outcome
@@ -484,7 +442,7 @@ resource "aws_cloudwatch_query_definition" "request" {
 }
 
 resource "aws_cloudwatch_query_definition" "slow_routes" {
-  name            = "Ledgerline/Slowest routes"
+  name            = "Ledgerline/${title(var.environment)}/Slowest routes"
   log_group_names = [aws_cloudwatch_log_group.app.name]
   query_string    = <<-EOT
     filter logger = "ledgerline.access"
@@ -494,7 +452,7 @@ resource "aws_cloudwatch_query_definition" "slow_routes" {
 }
 
 resource "aws_cloudwatch_query_definition" "extractions_by_tenant" {
-  name            = "Ledgerline/Extractions by tenant and outcome"
+  name            = "Ledgerline/${title(var.environment)}/Extractions by tenant and outcome"
   log_group_names = [aws_cloudwatch_log_group.app.name]
   query_string    = <<-EOT
     filter event = "extraction_finished"
@@ -504,7 +462,7 @@ resource "aws_cloudwatch_query_definition" "extractions_by_tenant" {
 }
 
 resource "aws_cloudwatch_query_definition" "llm_spend" {
-  name            = "Ledgerline/LLM spend by model and tenant"
+  name            = "Ledgerline/${title(var.environment)}/LLM spend by model and tenant"
   log_group_names = [aws_cloudwatch_log_group.app.name]
   query_string    = <<-EOT
     filter event = "llm_call"
@@ -602,18 +560,4 @@ resource "aws_cloudwatch_dashboard" "main" {
       },
     ]
   })
-}
-
-# ---------------------------------------------------------------- outputs
-
-output "dashboard_url" {
-  value = "https://${var.region}.console.aws.amazon.com/cloudwatch/home?region=${var.region}#dashboards/dashboard/${aws_cloudwatch_dashboard.main.dashboard_name}"
-}
-
-output "alerts_topic_arn" {
-  value = aws_sns_topic.alerts.arn
-}
-
-output "canary_name" {
-  value = aws_synthetics_canary.uptime.name
 }

@@ -19,20 +19,12 @@
 #   and desired count, which CI changes on every deploy. A settings change made
 #   here takes effect on the next deploy.
 
-variable "llm_provider" {
-  description = "fake (no API calls) or gemini (set the gemini_api_key parameter first)."
-  type        = string
-  default     = "fake"
-}
-
 locals {
   container_port = 8000 # what uvicorn listens on inside the image (Dockerfile)
-  # Two subnets: the minimum a load balancer needs. Each costs a public IPv4 address.
-  alb_subnets = slice(sort(data.aws_subnets.default.ids), 0, 2)
 
   # Placeholder image tag. CI replaces it on every deploy; Terraform's revision
   # of the task definition is only the template CI copies.
-  template_image = "${aws_ecr_repository.app.repository_url}:template"
+  template_image = "${var.ecr_repository_url}:template"
 
   db_secret_arn = aws_db_instance.main.master_user_secret[0].secret_arn
 
@@ -227,12 +219,6 @@ resource "aws_ecs_task_definition" "app" {
   }])
 }
 
-variable "cloudwatch_agent_image" {
-  description = "CloudWatch agent image (needs 1.300070.0+ for OTLP). Pin a version or digest once you've seen it work."
-  type        = string
-  default     = "public.ecr.aws/cloudwatch-agent/cloudwatch-agent:latest"
-}
-
 # The agent signs telemetry with the TASK role's credentials.
 resource "aws_iam_role_policy_attachment" "task_cloudwatch_agent" {
   role       = aws_iam_role.task.name
@@ -297,7 +283,7 @@ data "aws_ec2_managed_prefix_list" "cloudfront" {
 resource "aws_security_group" "alb" {
   name        = "${local.name}-alb"
   description = "Ledgerline load balancer"
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = var.vpc_id
 }
 
 resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront" {
@@ -331,7 +317,7 @@ resource "aws_lb" "app" {
   name                       = local.name
   load_balancer_type         = "application"
   internal                   = false
-  subnets                    = local.alb_subnets
+  subnets                    = var.alb_subnet_ids
   security_groups            = [aws_security_group.alb.id]
   drop_invalid_header_fields = true # reject malformed headers (request smuggling defence)
 }
@@ -341,7 +327,7 @@ resource "aws_lb_target_group" "app" {
   port        = local.container_port
   protocol    = "HTTP"
   target_type = "ip" # Fargate tasks are registered by IP address
-  vpc_id      = data.aws_vpc.default.id
+  vpc_id      = var.vpc_id
 
   # Readiness (guide 2.8): a task gets traffic only while it can reach the database.
   health_check {
@@ -387,9 +373,11 @@ resource "aws_ecs_service" "app" {
   desired_count = 0
 
   network_configuration {
-    subnets          = data.aws_subnets.default.ids
+    subnets          = var.app_subnet_ids
     security_groups  = [aws_security_group.app.id]
-    assign_public_ip = true # to reach ECR, S3 and Gemini without a NAT gateway (~$40/month)
+    # Staging: public IPs to reach ECR, S3 and Gemini without a NAT gateway.
+    # Production: private subnets, outbound through NAT.
+    assign_public_ip = var.assign_public_ip
   }
 
   load_balancer {
@@ -464,15 +452,4 @@ resource "aws_cloudfront_distribution" "app" {
   viewer_certificate {
     cloudfront_default_certificate = true
   }
-}
-
-# ---------------------------------------------------------------- outputs
-
-output "staging_url" {
-  description = "Open this. Username: anything; password: the site_password parameter."
-  value       = "https://${aws_cloudfront_distribution.app.domain_name}"
-}
-
-output "ecs_cluster" {
-  value = aws_ecs_cluster.main.name
 }

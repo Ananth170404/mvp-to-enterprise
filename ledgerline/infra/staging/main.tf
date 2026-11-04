@@ -1,14 +1,12 @@
 # Ledgerline staging environment.
 #
-# Built up step by step (guide Chapter 2):
-#   Step 2  container registry + documents bucket   <- this file
-#   Step 3  Postgres (RDS)                          <- database.tf, network.tf
-#   Step 4  secrets                                 <- secrets.tf
-#   Step 5  GitHub Actions pushes images           <- github_ci.tf
-#   Step 6  the app on ECS Fargate, deployed by CI  <- app.tf
-#
-# Chapter 3: alerts, alarms, uptime canary, dashboard  <- observability.tf
-#            (+ CloudWatch agent sidecar in app.tf, Sentry DSN in secrets.tf)
+# Built step by step in Chapter 2 (registry, database, secrets, CI, ECS) and
+# Chapter 3 (observability). In Chapter 4 the environment itself moved into a
+# module shared with production (../modules/environment); this root keeps:
+#   main.tf       providers, the default-VPC network, the environment module
+#   github_ci.tf  the CI identity (pushes images, deploys staging)
+#   shared.tf     account-wide pieces: the image registry, X-Ray Transaction Search
+#   moved.tf      tells Terraform the resources moved into the module (no rebuild)
 #
 #   cd ledgerline/infra/staging
 #   copy backend.hcl.example backend.hcl      (then fill in your bucket name)
@@ -70,6 +68,45 @@ variable "environment" {
   default = "staging"
 }
 
+# Personal and tunable values: set in terraform.tfvars (git-ignored).
+variable "alert_email" {
+  type = string
+}
+
+variable "alarms_enabled" {
+  type    = bool
+  default = true
+}
+
+variable "llm_cost_alarm_usd_per_hour" {
+  type    = number
+  default = 1
+}
+
+variable "llm_provider" {
+  type    = string
+  default = "fake"
+}
+
+variable "cloudwatch_agent_image" {
+  type    = string
+  default = "public.ecr.aws/cloudwatch-agent/cloudwatch-agent:latest"
+}
+
+variable "free_plan" {
+  type    = bool
+  default = true
+}
+
+variable "secret_versions" {
+  type = map(number)
+  default = {
+    app_db_password = 1
+    site_password   = 1
+    gemini_api_key  = 1
+  }
+}
+
 data "aws_caller_identity" "current" {}
 
 locals {
@@ -77,60 +114,103 @@ locals {
   account_id = data.aws_caller_identity.current.account_id
 }
 
-# ---------------------------------------------------------------- registry
+# ---------------------------------------------------------------- network
 
-# Where CI pushes the runtime image. Tags are IMMUTABLE: once an image is
-# pushed as a commit SHA, that tag can never point at different code. That's
-# what makes "build once, promote the same image" trustworthy.
-resource "aws_ecr_repository" "app" {
-  name                 = "ledgerline"
-  image_tag_mutability = "IMMUTABLE"
+# Staging uses the account's DEFAULT VPC: it already exists, costs nothing,
+# and has subnets in every AZ. Its subnets are public; the database isn't
+# publicly accessible and only accepts the app's security group. Production
+# gets its own VPC with private subnets (../production).
+data "aws_vpc" "default" {
+  default = true
+}
 
-  image_scanning_configuration {
-    scan_on_push = true # basic vulnerability scan of every pushed image
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
   }
-
-  encryption_configuration {
-    encryption_type = "AES256"
+  filter {
+    name   = "default-for-az"
+    values = ["true"]
   }
 }
 
-# Keep the 20 most recent images; older ones are deleted automatically.
-resource "aws_ecr_lifecycle_policy" "app" {
-  repository = aws_ecr_repository.app.name
-  policy = jsonencode({
-    rules = [{
-      rulePriority = 1
-      description  = "Keep the last 20 images"
-      selection = {
-        tagStatus   = "any"
-        countType   = "imageCountMoreThan"
-        countNumber = 20
-      }
-      action = { type = "expire" }
-    }]
-  })
-}
+# ---------------------------------------------------------------- the environment
 
-# ---------------------------------------------------------------- documents
+module "env" {
+  source = "../modules/environment"
 
-# Uploaded invoices. Container disks vanish on every deploy, so files live
-# here (STORAGE_BACKEND=s3). Versioning means an overwritten or deleted
-# invoice can be recovered for 30 days.
-module "documents" {
-  source                  = "../modules/private_bucket"
-  name                    = "${local.name}-documents-${local.account_id}"
-  noncurrent_version_days = 30
+  environment = var.environment
+  region      = var.region
+
+  vpc_id           = data.aws_vpc.default.id
+  alb_subnet_ids   = slice(sort(data.aws_subnets.default.ids), 0, 2) # two: each costs a public IPv4 address
+  app_subnet_ids   = data.aws_subnets.default.ids
+  db_subnet_ids    = data.aws_subnets.default.ids
+  assign_public_ip = true # no NAT gateway in staging (~$40/month saved)
+
+  ecr_repository_url     = aws_ecr_repository.app.repository_url
+  llm_provider           = var.llm_provider
+  cloudwatch_agent_image = var.cloudwatch_agent_image
+
+  free_plan           = var.free_plan
+  multi_az            = false
+  deletion_protection = false
+
+  secret_versions             = var.secret_versions
+  alert_email                 = var.alert_email
+  alarms_enabled              = var.alarms_enabled
+  llm_cost_alarm_usd_per_hour = var.llm_cost_alarm_usd_per_hour
 }
 
 # ---------------------------------------------------------------- outputs
 
+output "staging_url" {
+  description = "Open this. Username: anything; password: the site_password parameter."
+  value       = module.env.url
+}
+
+output "ecs_cluster" {
+  value = module.env.ecs_cluster
+}
+
 output "ecr_repository_url" {
-  description = "Push images here, tagged with the git commit SHA."
+  description = "CI pushes images here, tagged with the git commit SHA."
   value       = aws_ecr_repository.app.repository_url
 }
 
 output "documents_bucket" {
-  description = "Set as S3_BUCKET for the app."
-  value       = module.documents.name
+  value = module.env.documents_bucket
+}
+
+output "db_endpoint" {
+  value = module.env.db_endpoint
+}
+
+output "db_master_secret_arn" {
+  value = module.env.db_master_secret_arn
+}
+
+output "app_security_group_id" {
+  value = module.env.app_security_group_id
+}
+
+output "subnet_ids" {
+  value = data.aws_subnets.default.ids
+}
+
+output "secret_parameters" {
+  value = module.env.secret_parameters
+}
+
+output "dashboard_url" {
+  value = module.env.dashboard_url
+}
+
+output "alerts_topic_arn" {
+  value = module.env.alerts_topic_arn
+}
+
+output "canary_name" {
+  value = module.env.canary_name
 }

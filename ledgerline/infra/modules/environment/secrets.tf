@@ -16,16 +16,6 @@ locals {
   ssm_prefix = "/ledgerline/${var.environment}"
 }
 
-variable "secret_versions" {
-  description = "Increase a number to send a new value for that secret (rotation). Write-only values are only re-sent when their version changes."
-  type        = map(number)
-  default = {
-    app_db_password = 1
-    site_password   = 1
-    gemini_api_key  = 1
-  }
-}
-
 # Password for ledgerline_app, the restricted database user (guide 2.3). The
 # migration task sets it on the database (python -m app.db_roles); the app
 # uses it to connect. After rotating, run a deploy so both pick it up.
@@ -83,12 +73,3 @@ resource "aws_ssm_parameter" "sentry_dsn" {
   value_wo_version = 1
 }
 
-output "secret_parameters" {
-  description = "Parameter Store names. Values are never shown by Terraform."
-  value = {
-    app_db_password = aws_ssm_parameter.app_db_password.name
-    site_password   = aws_ssm_parameter.site_password.name
-    gemini_api_key  = aws_ssm_parameter.gemini_api_key.name
-    sentry_dsn      = aws_ssm_parameter.sentry_dsn.name
-  }
-}

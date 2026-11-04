@@ -1,0 +1,20 @@
+# Non-secret configuration. The same variables ECS sets in its task
+# definition (infra/staging/app.tf) and Compose sets in docker-compose.yml:
+# the app doesn't know which platform it's on.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ledgerline-config
+data:
+  # "development" because this demo stores files on a volume; deployed
+  # environments must use S3 (the app refuses otherwise, see app/config.py).
+  APP_ENV: development
+  DB_HOST: postgres
+  DB_NAME: ledgerline
+  DB_USER: ledgerline_app        # the app's restricted user
+  MIGRATION_DB_USER: ledgerline  # the schema owner, used only by the migration Job
+  DB_SSLMODE: disable            # in-cluster Postgres without TLS (demo only)
+  STORAGE_BACKEND: local
+  STORAGE_DIR: /data/storage
+  LLM_PROVIDER: fake
+  LOG_FORMAT: json

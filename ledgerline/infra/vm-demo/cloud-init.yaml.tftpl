@@ -1,0 +1,50 @@
+#cloud-config
+# First-boot setup for the Ledgerline demo server (guide Chapter 4, part 2).
+# cloud-init runs this once, as root, when the instance is created.
+
+package_update: true
+package_upgrade: true   # security updates before anything runs
+packages:
+  - docker.io
+  - docker-compose-v2
+  - amazon-ecr-credential-helper  # docker pulls from ECR using the instance's role: no stored keys
+  - unattended-upgrades           # keep applying security updates after today
+
+write_files:
+  - path: /root/.docker/config.json
+    permissions: "0600"
+    content: |
+      {"credHelpers": {"${registry}": "ecr-login"}}
+  - path: /opt/ledgerline/compose.yaml
+    permissions: "0644"
+    content: |
+      ${indent(6, compose)}
+  - path: /opt/ledgerline/Caddyfile
+    permissions: "0644"
+    content: |
+      ${indent(6, caddyfile)}
+  - path: /opt/ledgerline/bootstrap.sh
+    permissions: "0700"
+    content: |
+      #!/bin/sh
+      # Generate secrets and settings ON the server, once. They never leave it:
+      # not in Terraform state, not in user data, not in git.
+      set -eu
+      cd /opt/ledgerline
+      if [ ! -f .env ]; then
+        token=$(curl -sS -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+        ip=$(curl -sS -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/public-ipv4)
+        umask 077
+        cat > .env <<ENV
+      IMAGE=${image}
+      SITE_ADDRESS=$(echo "$ip" | tr . -).sslip.io
+      POSTGRES_PASSWORD=$(openssl rand -hex 24)
+      APP_DB_PASSWORD=$(openssl rand -hex 24)
+      SITE_PASSWORD=$(openssl rand -hex 12)
+      ENV
+      fi
+      docker compose up -d
+
+runcmd:
+  - systemctl enable --now docker
+  - /opt/ledgerline/bootstrap.sh

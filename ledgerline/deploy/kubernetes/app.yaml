@@ -1,0 +1,98 @@
+# The web app: a Deployment (replaceable, identical pods) behind a Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ledgerline
+spec:
+  selector:
+    app: ledgerline
+  ports:
+    - port: 80
+      targetPort: 8000
+---
+# Uploaded files on a volume: the one part of this demo that ISN'T how
+# production works. A volume ties the app to one node; in a real cluster
+# files go to S3 (STORAGE_BACKEND=s3, as on ECS) and the app scales freely.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ledgerline-storage
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ledgerline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ledgerline
+  # Rolling update: start a new pod, wait until it's ready, then stop an old one.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: ledgerline
+    spec:
+      terminationGracePeriodSeconds: 30 # uvicorn finishes requests within 25 s
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      initContainers:
+        # The volume is created root-owned; the app runs as user 1000.
+        - name: fix-storage-permissions
+          image: busybox:1.37
+          command: ["sh", "-c", "chown -R 1000:1000 /data/storage"]
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+          volumeMounts:
+            - name: storage
+              mountPath: /data/storage
+      containers:
+        - name: app
+          image: ledgerline:local
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef: { name: ledgerline-config }
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: ledgerline-db, key: app-password }
+          # The same two endpoints ECS and the load balancer use (guide 2.8):
+          # liveness decides "restart me", readiness decides "send me traffic".
+          startupProbe:
+            httpGet: { path: /livez, port: 8000 }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /livez, port: 8000 }
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8000 }
+            periodSeconds: 5
+            failureThreshold: 2
+          # Requests: what the scheduler reserves. Limits: the ceiling. No CPU
+          # limit on purpose (throttling hurts latency); a memory limit, so a
+          # leak kills this pod rather than the node.
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+          volumeMounts:
+            - name: storage
+              mountPath: /data/storage
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: ledgerline-storage

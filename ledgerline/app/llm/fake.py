@@ -9,6 +9,7 @@ still has something to show.
 """
 
 import json
+import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -18,14 +19,17 @@ from app.llm.base import Attachment, LLMResult
 class FakeProvider:
     name = "fake"
 
-    def __init__(self, manifest_path: Path | None = None, answers: dict[str, dict] | None = None):
+    def __init__(self, manifest_path: Path | None = None, answers: dict[str, dict] | None = None, delay_seconds: float = 0):
         self._answers: dict[str, dict] = dict(answers or {})
+        self._delay = delay_seconds  # simulate a real model's latency
         if manifest_path and manifest_path.exists():
             manifest = json.loads(manifest_path.read_text())
             for item in manifest.get("invoices", []):
                 self._answers.setdefault(item["sha256"], item["truth"])
 
     def generate_json(self, prompt: str, attachments: list[Attachment], json_schema: dict, model: str) -> LLMResult:
+        if self._delay:
+            time.sleep(self._delay)
         sha = attachments[0].sha256 if attachments else ""
         answer = self._answers.get(
             sha,

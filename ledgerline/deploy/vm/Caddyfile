@@ -1,0 +1,7 @@
+# One site: HTTPS for SITE_ADDRESS (obtained and renewed automatically),
+# everything proxied to the app. Caddy adds X-Forwarded-* headers; uvicorn
+# trusts them (--proxy-headers in the Dockerfile).
+{$SITE_ADDRESS} {
+	encode zstd gzip
+	reverse_proxy api:8000
+}

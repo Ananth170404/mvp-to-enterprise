@@ -1,1 +1,2 @@
+# Shell scripts run on Linux (CI, containers, Lambda): always LF line endings.
 *.sh text eol=lf

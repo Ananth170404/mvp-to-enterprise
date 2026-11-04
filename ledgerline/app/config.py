@@ -70,6 +70,9 @@ class Settings:
     sentry_dsn: str | None = None
     log_format: str = "json"  # json | text
     git_sha: str = "unknown"  # baked into the image at build time
+    # Make the fake provider as slow as a real model, to see how background work
+    # behaves on a platform (Chapter 4: Lambda freezes it) or under load (Chapter 6).
+    fake_llm_delay_seconds: float = 0
 
     @property
     def is_production(self) -> bool:
@@ -103,6 +106,7 @@ def load_settings() -> Settings:
         sentry_dsn=os.getenv("SENTRY_DSN") or None,
         log_format=os.getenv("LOG_FORMAT", "json"),
         git_sha=os.getenv("GIT_SHA", "unknown"),
+        fake_llm_delay_seconds=float(os.getenv("FAKE_LLM_DELAY_SECONDS", "0")),
     )
     validate(settings)
     return settings

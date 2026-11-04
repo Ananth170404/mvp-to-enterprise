@@ -1,0 +1,64 @@
+# Postgres inside the cluster, for the demo only. In production, use a managed
+# database (RDS, Cloud SQL) outside the cluster, or a Postgres operator
+# (CloudNativePG) with backups configured: databases are the hardest thing to
+# run well on Kubernetes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+---
+# A StatefulSet, not a Deployment: a stable name and its own disk that
+# survives restarts (volumeClaimTemplates).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - name: POSTGRES_USER
+              value: ledgerline
+            - name: POSTGRES_DB
+              value: ledgerline
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: ledgerline-db, key: owner-password }
+            - name: PGDATA # a subfolder: the volume's root may contain lost+found
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "ledgerline"]
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

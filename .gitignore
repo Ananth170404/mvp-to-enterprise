@@ -32,3 +32,6 @@ crash.log
 backend.hcl
 # Personal Terraform values (e.g. alert email); commit terraform.tfvars.example instead.
 terraform.tfvars
+
+# Build output (Lambda package, Chapter 4)
+ledgerline/build/
