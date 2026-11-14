@@ -18,7 +18,7 @@ Everything here reflects AWS as of October 2026. CloudWatch's OpenTelemetry supp
 - [3B.8 Errors: Sentry on staging](#3b8-errors-sentry-on-staging)
 - [3B.9 Dashboard and saved queries](#3b9-dashboard-and-saved-queries)
 - [3B.10 Doing it](#3b10-doing-it)
-- [3B.11 Runbooks](#runbooks)
+- [3B.11 Runbooks](#3b11-runbooks)
 - [3B.12 Configuring and extending](#3b12-configuring-and-extending)
 - [3B.13 Pausing without false alarms](#3b13-pausing-without-false-alarms)
 - [3B.14 Cost](#3b14-cost)
@@ -202,7 +202,7 @@ IF(requests >= 10, (app5xx + lb5xx) / requests, 0)
 | `error-logs` | `ErrorLogLines` | More than 10 in 15 minutes |
 | `uptime` | Canary `SuccessPercent` | Two failed checks in a row (section 3B.7) |
 
-Every alarm sends to one SNS topic, which emails you. Most also send an **OK** notification when they recover, so you know when a problem has resolved itself. Each alarm's description says what it means and links to its [runbook](#runbooks).
+Every alarm sends to one SNS topic, which emails you. Most also send an **OK** notification when they recover, so you know when a problem has resolved itself. Each alarm's description says what it means and links to its [runbook](#3b11-runbooks).
 
 `treat_missing_data` is decided per alarm, deliberately. For ratios and latencies, *no data* means *no traffic*, which isn't an outage (`notBreaching`). For healthy targets and the uptime check, *no data* means something stopped reporting, which is suspicious (`breaching`).
 

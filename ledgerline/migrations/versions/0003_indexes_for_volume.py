@@ -11,11 +11,16 @@ Each index matches a query's shape: equality columns first, then the column
 it sorts or ranges on.
 
   invoices (tenant_id, created_at)         the list page: one tenant, newest first
-  invoices (tenant_id, status, created_at) the list filtered by status, and the
-                                           status counts (answered from the index alone)
+  invoices (tenant_id, status, created_at) the list filtered by status
   invoices (tenant_id, vendor_tax_id)      duplicate checks on every extraction
   extraction_runs (tenant_id) INCLUDE (cost_usd)
-                                           the spend total, from the index alone
+                                           lets the spend total be read from the
+                                           index alone (an index-only scan)
+
+What these do NOT fix: the status counts and the spend total. Both still read
+one index entry per invoice (700,000 for the largest tenant), indexed or not.
+Counting many rows needs a different design: a summary kept up to date, a
+cache, or an estimate (guide 5.5).
 
 Built CONCURRENTLY: no lock that blocks writes while they build (minutes on a
 big table). The cost: CONCURRENTLY can't run in a transaction, and a failed

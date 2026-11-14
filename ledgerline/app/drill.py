@@ -107,7 +107,13 @@ def state(engine) -> None:
         tenant_id = _tenant_id(conn)
         if tenant_id is None:
             sys.exit("No Drill Co tenant here. Run `prepare` first.")
-        now = conn.scalar(text("SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')"))
+        # Rounded UP to the next whole second. Point-in-time restore takes whole
+        # seconds; restoring to this second rounded DOWN can land a fraction of a
+        # second before the rows you want (we did exactly that, guide 5B).
+        safe = conn.scalar(
+            text("""SELECT to_char(date_trunc('second', now() AT TIME ZONE 'UTC') + interval '1 second',
+                                   'YYYY-MM-DD"T"HH24:MI:SS"Z"')""")
+        )
         counts = conn.execute(
             text("SELECT status, count(*) FROM invoices WHERE tenant_id = :t GROUP BY status ORDER BY status"),
             {"t": tenant_id},
@@ -119,7 +125,7 @@ def state(engine) -> None:
                     FROM invoices WHERE tenant_id = :t"""),
             {"t": tenant_id},
         )
-    print(f"database time (UTC): {now}")
+    print(f"safe restore point (UTC): {safe}  (restore to this or later, but before any accident)")
     for status, count in counts:
         print(f"  {status:<14}{count:>5}")
     print(f"fingerprint: {fingerprint}")
