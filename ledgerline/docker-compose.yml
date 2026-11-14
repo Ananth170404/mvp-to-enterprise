@@ -28,6 +28,8 @@ x-app: &app
 services:
   db:
     image: postgres:16
+        # pg_stat_statements: Postgres records every statement's calls and timings (Chapter 5). RDS loads it by default.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all"]
     environment:
       POSTGRES_USER: ledgerline
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ledgerline-dev}

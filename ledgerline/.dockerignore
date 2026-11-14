@@ -5,3 +5,11 @@ __pycache__
 data/generated
 data/storage
 data/eval-results
+# Not needed in the image, and large: Terraform providers (hundreds of MB per
+# stack), the Lambda build, local virtualenvs, Git history.
+infra
+build
+deploy
+.venv
+.git
+*.zip

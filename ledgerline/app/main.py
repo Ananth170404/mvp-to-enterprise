@@ -17,16 +17,16 @@ from urllib.parse import quote_plus
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app import audit, checks, workflow
+from app import audit, checks, queries, workflow
 from app.auth import COOKIE, CurrentUser, LoginRequired, current_user
 from app.config import settings
 from app.db import engine, get_session
 from app.extraction import extract_invoice
 from app.maintenance import recover_stuck_extractions
-from app.models import AuditEvent, Document, ExtractionRun, Invoice, User
+from app.models import AuditEvent, Document, Invoice, User
 from app.money import fmt, qty, to_minor
 from app.observability import (
     configure_logging,
@@ -219,18 +219,9 @@ def list_invoices(
     user: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ):
-    query = select(Invoice).where(Invoice.tenant_id == user.tenant_id).order_by(Invoice.created_at.desc())
-    if status:
-        query = query.where(Invoice.status == status)
-    invoices = session.scalars(query.limit(200)).all()
-    counts = dict(
-        session.execute(
-            select(Invoice.status, func.count()).where(Invoice.tenant_id == user.tenant_id).group_by(Invoice.status)
-        ).all()
-    )
-    spend = session.scalar(
-        select(func.coalesce(func.sum(ExtractionRun.cost_usd), 0)).where(ExtractionRun.tenant_id == user.tenant_id)
-    )
+    invoices = session.scalars(queries.invoice_page(user.tenant_id, status)).all()
+    counts = dict(session.execute(queries.status_counts(user.tenant_id)).all())
+    spend = session.scalar(queries.total_spend(user.tenant_id))
     return templates.TemplateResponse(
         request,
         "invoices.html",

@@ -13,7 +13,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import gstin
+from app import gstin, queries
 from app.models import Invoice, PurchaseOrder, Vendor
 from app.money import fmt, qty
 
@@ -150,12 +150,7 @@ def _purchase_order(session: Session, inv: Invoice) -> list[dict]:
 def _duplicates(session: Session, inv: Invoice) -> list[dict]:
     if not inv.vendor_tax_id:
         return []
-    others = select(Invoice).where(
-        Invoice.tenant_id == inv.tenant_id,
-        Invoice.id != inv.id,
-        Invoice.vendor_tax_id == inv.vendor_tax_id,
-        Invoice.status != "rejected",
-    )
+    others = queries.possible_duplicates(inv.tenant_id, inv.id, inv.vendor_tax_id)
     flags = []
     if inv.invoice_number:
         same_number = session.scalar(others.where(Invoice.invoice_number == inv.invoice_number))

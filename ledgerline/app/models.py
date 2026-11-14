@@ -115,7 +115,13 @@ class Document(Base):
 
 class Invoice(Base):
     __tablename__ = "invoices"
-    __table_args__ = (Index("ix_invoices_status_status_changed_at", "status", "status_changed_at"),)
+    __table_args__ = (
+        Index("ix_invoices_status_status_changed_at", "status", "status_changed_at"),
+        # Shaped like the queries in app/queries.py (migration 0003, guide Chapter 5).
+        Index("ix_invoices_tenant_id_created_at", "tenant_id", "created_at"),
+        Index("ix_invoices_tenant_id_status_created_at", "tenant_id", "status", "created_at"),
+        Index("ix_invoices_tenant_id_vendor_tax_id", "tenant_id", "vendor_tax_id"),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
     document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), unique=True)
@@ -173,6 +179,8 @@ class ExtractionRun(Base):
     """One LLM call. The basis for cost tracking, debugging and evals."""
 
     __tablename__ = "extraction_runs"
+    # The spend total reads only these two columns: answered from the index alone.
+    __table_args__ = (Index("ix_extraction_runs_tenant_id_cost", "tenant_id", postgresql_include=["cost_usd"]),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
     invoice_id: Mapped[str] = mapped_column(ForeignKey("invoices.id"), index=True)
