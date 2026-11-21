@@ -1,24 +1,29 @@
 """Housekeeping jobs.
 
-recover_stuck_extractions() finds invoices left in "extracting" for longer than
-any extraction can take. That happens when the process running the extraction
-dies mid-way: a deploy, a crash, an out-of-memory kill. Without this, those
-invoices sit in "extracting" forever and nobody notices.
+recover_stuck_extractions() finds invoices whose extraction never finished:
 
-It runs on app startup, and can be run on a schedule:
+  * "extracting" for longer than any extraction can take: every attempt died
+    part-way, and the queue gave up (the job is in the dead-letter queue)
+  * "uploaded" for much longer than the queue normally takes: the job was
+    never queued (the app crashed between saving the invoice and sending the
+    job), or it failed before starting, every time
+
+It marks them failed, so they show up for a person to retry instead of
+sitting there forever. The worker runs it every few minutes (app/worker.py),
+and it can be run by hand:
 
     python -m app.maintenance recover-stuck            # mark them failed
-    python -m app.maintenance recover-stuck --retry    # mark failed, then re-extract
+    python -m app.maintenance recover-stuck --retry    # mark failed, then queue them again
 
-In Chapter 6 a proper job queue makes this mostly unnecessary, but the habit
-stays: anything that can start must have a way to be noticed if it never ends.
+The queue (Chapter 6) makes this rare, but the habit stays: anything that can
+start must have a way to be noticed if it never ends.
 """
 
 import argparse
 import logging
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from app import workflow
 from app.config import settings
@@ -28,23 +33,31 @@ from app.models import Invoice, utcnow
 log = logging.getLogger("ledgerline.maintenance")
 
 
+# A job can legitimately wait in the queue during a backlog, or while workers
+# scale up from zero; only call it lost after much longer than that.
+NEVER_STARTED_AFTER_MINUTES = 60
+
+
 def recover_stuck_extractions(older_than_minutes: int | None = None, session_factory=SessionLocal) -> list[str]:
     minutes = older_than_minutes if older_than_minutes is not None else settings.stuck_after_minutes
     cutoff = utcnow() - timedelta(minutes=minutes)
+    never_started = utcnow() - timedelta(minutes=max(minutes, NEVER_STARTED_AFTER_MINUTES))
     session = session_factory()
     recovered: list[str] = []
     try:
         # SKIP LOCKED: if two instances start at once, each row is handled by one of them.
         stuck = session.scalars(
             select(Invoice)
-            .where(Invoice.status == "extracting", Invoice.status_changed_at < cutoff)
+            .where(or_(
+                and_(Invoice.status == "extracting", Invoice.status_changed_at < cutoff),
+                and_(Invoice.status == "uploaded", Invoice.status_changed_at < never_started),
+            ))
             .with_for_update(skip_locked=True)
         ).all()
         for invoice in stuck:
-            workflow.transition(
-                session, invoice, "extraction_failed", actor_id=None,
-                reason=f"Interrupted: still extracting after {minutes} minutes",
-            )
+            reason = (f"Interrupted: still extracting after {minutes} minutes" if invoice.status == "extracting"
+                      else "Never started: no worker picked up the extraction")
+            workflow.transition(session, invoice, "extraction_failed", actor_id=None, reason=reason)
             recovered.append(invoice.id)
         session.commit()
     finally:
@@ -69,11 +82,15 @@ def main() -> None:
         ids = recover_stuck_extractions(args.minutes)
         print(f"Recovered {len(ids)} stuck extraction(s)")
         if args.retry:
-            from app.extraction import extract_invoice
+            from app import jobs
 
-            for invoice_id in ids:
-                extract_invoice(invoice_id)
-            print(f"Re-extracted {len(ids)} invoice(s)")
+            session = SessionLocal()
+            try:
+                for invoice_id in ids:
+                    jobs.enqueue_extraction(session.get(Invoice, invoice_id))
+            finally:
+                session.close()
+            print(f"Queued {len(ids)} invoice(s) for extraction again")
 
 
 if __name__ == "__main__":

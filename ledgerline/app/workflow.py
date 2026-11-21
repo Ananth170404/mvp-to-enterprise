@@ -5,9 +5,12 @@ no sense (approving an invoice that was never reviewed, re-opening a rejected
 one) and records each change in the audit log.
 
     uploaded ──> extracting ──> needs_review ──> approved
-                     │               │
-                     v               └─────────> rejected
-             extraction_failed ──> extracting   (retry)
+       │             │  ↺            │
+       │             v               └─────────> rejected
+       └──> extraction_failed ──> extracting   (retry)
+
+    extracting ↺ extracting: a retried job takes over from an attempt that died
+    uploaded ──> extraction_failed: the job never ran (app.maintenance)
 """
 
 from sqlalchemy.orm import Session
@@ -16,8 +19,8 @@ from app import audit
 from app.models import Invoice, utcnow
 
 ALLOWED: dict[str, set[str]] = {
-    "uploaded": {"extracting"},
-    "extracting": {"needs_review", "extraction_failed"},
+    "uploaded": {"extracting", "extraction_failed"},
+    "extracting": {"needs_review", "extraction_failed", "extracting"},
     "extraction_failed": {"extracting"},
     "needs_review": {"approved", "rejected", "extracting"},
     "approved": set(),  # terminal: payment happens downstream

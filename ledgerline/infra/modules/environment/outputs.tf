@@ -46,3 +46,15 @@ output "alerts_topic_arn" {
 output "canary_name" {
   value = aws_synthetics_canary.uptime.name
 }
+
+output "job_queue_url" {
+  value = aws_sqs_queue.jobs.url
+}
+
+output "job_dead_letter_queue_url" {
+  value = aws_sqs_queue.jobs_dlq.url
+}
+
+output "worker_service" {
+  value = aws_ecs_service.worker.name
+}

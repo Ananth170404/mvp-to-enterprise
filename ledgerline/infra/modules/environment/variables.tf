@@ -113,3 +113,23 @@ variable "llm_cost_alarm_usd_per_hour" {
   type        = number
   default     = 1
 }
+
+# ---------------------------------------------------------------- background jobs (Chapter 6)
+
+variable "worker_min_count" {
+  description = "Fewest worker tasks. 0 scales to zero when the queue is empty (cheap; the first job waits a few minutes for a worker to start). Production: 1 or more."
+  type        = number
+  default     = 0
+}
+
+variable "worker_max_count" {
+  description = "Most worker tasks. Also caps how many extractions (LLM calls, database connections) run at once."
+  type        = number
+  default     = 3
+}
+
+variable "fake_llm_delay_seconds" {
+  description = "With llm_provider = fake, wait this long per call, to behave like a real model. 0 = instant."
+  type        = number
+  default     = 0
+}

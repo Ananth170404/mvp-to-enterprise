@@ -39,6 +39,7 @@ def _settings(**overrides) -> Settings:
         app_env="production", database_url="x", storage_backend="s3", storage_dir=None, s3_bucket="b",
         aws_region="ap-south-1", llm_provider="gemini", llm_model="m", gemini_api_key="k", dev_login=False,
         site_password=None, max_upload_bytes=1, fake_llm_manifest=None, stuck_after_minutes=10,
+        queue_backend="sqs", job_queue_url="https://sqs.example/123/q",
     )
     base.update(overrides)
     return Settings(**base)
@@ -62,7 +63,12 @@ def test_deployed_environments_refuse_unsafe_shortcuts():
         validate(_settings(app_env="staging", storage_backend="local"))
     with pytest.raises(RuntimeError, match="APP_ENV"):
         validate(_settings(app_env="prod"))
-    validate(_settings(app_env="development", storage_backend="local", llm_provider="fake", dev_login=True))
+    with pytest.raises(RuntimeError, match="QUEUE_BACKEND=sqs"):
+        validate(_settings(app_env="staging", queue_backend="inline"))
+    with pytest.raises(RuntimeError, match="JOB_QUEUE_URL"):
+        validate(_settings(job_queue_url=None))
+    validate(_settings(app_env="development", storage_backend="local", llm_provider="fake", dev_login=True,
+                       queue_backend="inline", job_queue_url=None))
 
 
 def test_s3_storage_round_trip():

@@ -3,8 +3,10 @@
 #
 #   1. register new task definitions: the latest ones, with only the image swapped
 #   2. run the migration task and wait; stop here if it fails
-#   3. roll the service to the new version and wait until it is stable
+#   3. roll the web service to the new version and wait until it is stable
 #   4. check the new version is really running (not rolled back)
+#   5. the same for the worker service (Chapter 6), whose task count is
+#      autoscaling's business, not ours
 #
 # Migrations run BEFORE the new code, so they must be backward compatible:
 # the old version keeps serving while they run (expand/contract, guide 2.6).
@@ -18,6 +20,8 @@ set -euo pipefail
 SERVICE="${SERVICE:-$CLUSTER-app}"
 APP_FAMILY="${APP_FAMILY:-$CLUSTER-app}"
 MIGRATE_FAMILY="${MIGRATE_FAMILY:-$CLUSTER-migrate}"
+WORKER_SERVICE="${WORKER_SERVICE:-$CLUSTER-worker}"
+WORKER_FAMILY="${WORKER_FAMILY:-$CLUSTER-worker}"
 DESIRED_COUNT="${DESIRED_COUNT:-1}"
 
 workdir="$(mktemp -d)"
@@ -44,6 +48,13 @@ migrate_td="$(register "$MIGRATE_FAMILY")"
 app_td="$(register "$APP_FAMILY")"
 echo "migrate: $migrate_td"
 echo "app:     $app_td"
+# Environments created before Chapter 6 have no worker yet.
+worker_status="$(aws ecs describe-services --cluster "$CLUSTER" --services "$WORKER_SERVICE" \
+  --query 'services[0].status' --output text 2>/dev/null || echo NONE)"
+if [[ "$worker_status" == "ACTIVE" ]]; then
+  worker_td="$(register "$WORKER_FAMILY")"
+  echo "worker:  $worker_td"
+fi
 echo "::endgroup::"
 
 # The migration task runs in the same subnets and security group as the app,
@@ -91,5 +102,22 @@ running="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" 
 if [[ "$running" != "$app_td" ]]; then
   echo "::error::The new version failed its health checks and was rolled back. Running: $running"
   exit 1
+fi
+
+if [[ -n "${worker_td:-}" ]]; then
+  echo "::group::Roll the worker service"
+  # No --desired-count: autoscaling owns it (often 0 in staging). Old workers
+  # get SIGTERM, finish their current job and stop; new ones take over.
+  aws ecs update-service --cluster "$CLUSTER" --service "$WORKER_SERVICE" \
+    --task-definition "$worker_td" --query 'service.deployments[0].id' --output text
+  aws ecs wait services-stable --cluster "$CLUSTER" --services "$WORKER_SERVICE"
+  echo "::endgroup::"
+  # shellcheck disable=SC2016
+  running="$(aws ecs describe-services --cluster "$CLUSTER" --services "$WORKER_SERVICE" \
+    --query 'services[0].deployments[?status==`PRIMARY`].taskDefinition | [0]' --output text)"
+  if [[ "$running" != "$worker_td" ]]; then
+    echo "::error::The new worker version failed and was rolled back. Running: $running"
+    exit 1
+  fi
 fi
 echo "Deployed $IMAGE"

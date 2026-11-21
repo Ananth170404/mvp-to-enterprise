@@ -1,15 +1,21 @@
 """Turn an uploaded document into structured invoice data.
 
-extract_invoice() is the unit of background work. Today FastAPI runs it as a
-background task in the same process. In Chapter 6 it moves to a Celery worker:
-only the *caller* changes, because this function takes an ID, opens its own
-session and is safe to run twice. If the process dies mid-way, the invoice
-stays in "extracting"; app.maintenance finds and recovers it.
+extract_invoice() is the unit of background work. app.worker runs it for each
+job on the queue (app/jobs.py, Chapter 6). It takes an ID, opens its own
+session, and is safe to run twice, because a queue may deliver a job twice:
+
+  * a duplicate of a job that already ran is skipped (the invoice's version
+    has moved on since the job was queued)
+  * a job whose earlier attempt died part-way (a deploy, a crash) is retried by
+    the queue, and takes over the invoice left in "extracting"
+
+If every attempt fails, app.maintenance eventually marks the invoice failed.
 """
 
 import json
 import logging
 import time
+from datetime import UTC
 from decimal import Decimal
 
 from opentelemetry import context as otel_context
@@ -22,7 +28,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.extraction_schema import EXTRACTION_PROMPT, PROMPT_VERSION, ExtractedInvoice, json_schema
 from app.llm import Attachment, LLMError, get_provider
-from app.models import ExtractionRun, Invoice, InvoiceLine
+from app.models import ExtractionRun, Invoice, InvoiceLine, utcnow
 from app.money import to_minor
 from app.observability import extraction_duration, invoices_extracted, llm_cost, llm_duration, llm_token_usage, tracer
 from app.storage import storage
@@ -32,7 +38,12 @@ log = logging.getLogger("ledgerline.extraction")
 MAX_ATTEMPTS = 3
 
 
-def extract_invoice(invoice_id: str, session_factory=SessionLocal) -> None:
+def extract_invoice(
+    invoice_id: str,
+    expected_version: str | None = None,
+    reclaim_after_seconds: float | None = None,
+    session_factory=SessionLocal,
+) -> None:
     """Extract one invoice, as its own trace, linked to the request that asked.
 
     Background work gets a NEW trace rather than becoming part of the upload
@@ -48,7 +59,7 @@ def extract_invoice(invoice_id: str, session_factory=SessionLocal) -> None:
         attributes={"ledgerline.invoice_id": invoice_id},
     ) as span:
         started = time.perf_counter()
-        outcome = _extract(invoice_id, session_factory)
+        outcome = _extract(invoice_id, expected_version, reclaim_after_seconds, session_factory)
         span.set_attribute("ledgerline.extraction.outcome", outcome)
         if outcome in {"needs_review", "extraction_failed"}:
             attrs = {"outcome": outcome, "llm_provider": settings.llm_provider}
@@ -61,8 +72,10 @@ def extract_invoice(invoice_id: str, session_factory=SessionLocal) -> None:
         )
 
 
-def _extract(invoice_id: str, session_factory) -> str:
+def _extract(invoice_id: str, expected_version, reclaim_after_seconds, session_factory) -> str:
     """Returns the outcome: needs_review | extraction_failed | skipped | not_found."""
+    from app.jobs import version_of  # app.jobs imports this module lazily; avoid a cycle
+
     session: Session = session_factory()
     try:
         # Lock the row: if two workers (or a retry and a recovery sweep) pick up
@@ -71,11 +84,27 @@ def _extract(invoice_id: str, session_factory) -> str:
         if invoice is None:
             log.warning("extract_invoice: invoice %s not found", invoice_id)
             return "not_found"
-        if invoice.status not in {"uploaded", "extraction_failed", "needs_review"}:
-            # Already being processed or finished: running twice is a no-op.
+        if invoice.status == "extracting":
+            # Another attempt claimed it. If that attempt is still running, leave
+            # it alone. If it died (we're a redelivery, and the claim is older
+            # than a job may go without a heartbeat), take over.
+            age = _age_seconds(invoice.status_changed_at)
+            if reclaim_after_seconds is None or age < reclaim_after_seconds:
+                log.info("extract_invoice: %s is already being extracted; skipping", invoice_id)
+                return "skipped"
+            workflow.transition(session, invoice, "extracting", actor_id=None,
+                                reason=f"Retry: the previous attempt stopped {age:.0f} s ago")
+        elif invoice.status in {"uploaded", "extraction_failed", "needs_review"}:
+            if expected_version is not None and version_of(invoice) != expected_version:
+                # Changed since this job was queued: a duplicate delivery of a job
+                # that already ran, or a newer request that will run instead.
+                log.info("extract_invoice: %s changed since the job was queued; skipping", invoice_id)
+                return "skipped"
+            workflow.transition(session, invoice, "extracting", actor_id=None)
+        else:
+            # Approved or rejected: a person has decided; never overwrite that.
             log.info("extract_invoice: skipping %s in status %s", invoice_id, invoice.status)
             return "skipped"
-        workflow.transition(session, invoice, "extracting", actor_id=None)
         session.commit()
 
         doc = invoice.document
@@ -213,3 +242,11 @@ def apply_extraction(invoice: Invoice, data: ExtractedInvoice) -> None:
         )
         for i, line in enumerate(data.line_items)
     ]
+
+
+def _age_seconds(when) -> float:
+    if when is None:
+        return float("inf")
+    if when.tzinfo is None:  # SQLite returns naive datetimes; the app stores UTC
+        when = when.replace(tzinfo=UTC)
+    return (utcnow() - when).total_seconds()

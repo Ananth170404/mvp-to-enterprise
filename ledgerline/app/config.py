@@ -73,6 +73,17 @@ class Settings:
     # Make the fake provider as slow as a real model, to see how background work
     # behaves on a platform (Chapter 4: Lambda freezes it) or under load (Chapter 6).
     fake_llm_delay_seconds: float = 0
+    # Background jobs (Chapter 6). "sqs": the app puts a message on a queue and
+    # app.worker does the work. "inline": the job runs immediately, in the same
+    # process (tests, and running the app without Docker).
+    queue_backend: str = "inline"
+    job_queue_url: str | None = None
+    # Only for local development: an SQS-compatible server (ElasticMQ).
+    sqs_endpoint_url: str | None = None
+    # How long a received job stays invisible to other workers. The worker
+    # extends it while a job runs, so it only matters when a worker dies:
+    # then the job is retried after at most this long.
+    job_visibility_seconds: int = 120
 
     @property
     def is_production(self) -> bool:
@@ -107,6 +118,10 @@ def load_settings() -> Settings:
         log_format=os.getenv("LOG_FORMAT", "json"),
         git_sha=os.getenv("GIT_SHA", "unknown"),
         fake_llm_delay_seconds=float(os.getenv("FAKE_LLM_DELAY_SECONDS", "0")),
+        queue_backend=os.getenv("QUEUE_BACKEND", "inline"),
+        job_queue_url=os.getenv("JOB_QUEUE_URL") or None,
+        sqs_endpoint_url=os.getenv("SQS_ENDPOINT_URL") or None,
+        job_visibility_seconds=int(os.getenv("JOB_VISIBILITY_SECONDS", "120")),
     )
     validate(settings)
     return settings
@@ -133,6 +148,14 @@ def validate(s: Settings) -> None:
         raise RuntimeError("STORAGE_BACKEND=s3 requires S3_BUCKET.")
     if s.llm_provider == "gemini" and not s.gemini_api_key:
         raise RuntimeError("LLM_PROVIDER=gemini requires GEMINI_API_KEY.")
+    if s.queue_backend not in {"inline", "sqs"}:
+        raise RuntimeError(f"QUEUE_BACKEND must be inline or sqs, got {s.queue_backend!r}.")
+    # Inline jobs run inside the web request and die with the process (a deploy,
+    # a crash). Deployed environments use the queue and a separate worker.
+    if s.is_deployed and s.queue_backend != "sqs":
+        raise RuntimeError("Deployed environments must use QUEUE_BACKEND=sqs.")
+    if s.queue_backend == "sqs" and not s.job_queue_url:
+        raise RuntimeError("QUEUE_BACKEND=sqs requires JOB_QUEUE_URL.")
     if s.log_format not in {"json", "text"}:
         raise RuntimeError(f"LOG_FORMAT must be json or text, got {s.log_format!r}.")
 

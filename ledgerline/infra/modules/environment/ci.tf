@@ -35,7 +35,7 @@ data "aws_iam_policy_document" "ci_deploy" {
   statement {
     sid       = "RollService"
     actions   = ["ecs:DescribeServices", "ecs:UpdateService"]
-    resources = [aws_ecs_service.app.id]
+    resources = [aws_ecs_service.app.id, aws_ecs_service.worker.id]
   }
   statement {
     sid       = "ReadMigrationLogs" # printed in CI when a migration fails
@@ -45,7 +45,7 @@ data "aws_iam_policy_document" "ci_deploy" {
   statement {
     sid       = "HandRolesToEcs" # a task definition names its roles; ECS must be allowed to use them
     actions   = ["iam:PassRole"]
-    resources = [aws_iam_role.task_execution.arn, aws_iam_role.task.arn]
+    resources = [aws_iam_role.task_execution.arn, aws_iam_role.task.arn, aws_iam_role.worker.arn]
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"

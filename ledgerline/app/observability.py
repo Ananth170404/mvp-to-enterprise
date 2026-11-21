@@ -185,6 +185,15 @@ llm_duration = meter.create_histogram(
 llm_cost = meter.create_counter(
     "ledgerline.llm.cost", unit="USD", description="Estimated LLM spend (from the pricing table)",
 )
+# Background jobs (Chapter 6). Wait time is what users feel when workers fall
+# behind; queue depth (from SQS) says how far behind.
+job_wait = meter.create_histogram(
+    "ledgerline.jobs.wait", unit="s", description="From a job being queued to a worker starting it",
+)
+jobs_processed = meter.create_counter(
+    "ledgerline.jobs.processed", unit="{job}",
+    description="Jobs a worker finished handling, by job_type and outcome (done | retry | poison)",
+)
 
 
 def fastapi_telemetry_config() -> dict:

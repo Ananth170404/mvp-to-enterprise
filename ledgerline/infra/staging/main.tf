@@ -161,6 +161,12 @@ module "env" {
   alert_email                 = var.alert_email
   alarms_enabled              = var.alarms_enabled
   llm_cost_alarm_usd_per_hour = var.llm_cost_alarm_usd_per_hour
+
+  # Background jobs (Chapter 6): workers scale to zero when idle, and the fake
+  # model takes as long as a real one, so queueing and scaling are visible.
+  worker_min_count       = 0
+  worker_max_count       = 3
+  fake_llm_delay_seconds = 15
 }
 
 # ---------------------------------------------------------------- outputs
@@ -213,4 +219,16 @@ output "alerts_topic_arn" {
 
 output "canary_name" {
   value = module.env.canary_name
+}
+
+output "job_queue_url" {
+  value = module.env.job_queue_url
+}
+
+output "job_dead_letter_queue_url" {
+  value = module.env.job_dead_letter_queue_url
+}
+
+output "worker_service" {
+  value = module.env.worker_service
 }

@@ -8,24 +8,20 @@ import base64
 import hashlib
 import logging
 import secrets
-import threading
-from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app import audit, checks, queries, workflow
+from app import audit, checks, jobs, queries, workflow
 from app.auth import COOKIE, CurrentUser, LoginRequired, current_user
 from app.config import settings
 from app.db import engine, get_session
-from app.extraction import extract_invoice
-from app.maintenance import recover_stuck_extractions
 from app.models import AuditEvent, Document, Invoice, User
 from app.money import fmt, qty, to_minor
 from app.observability import (
@@ -45,21 +41,8 @@ setup_sentry(settings.sentry_dsn, environment=settings.app_env, release=settings
 log = logging.getLogger("ledgerline")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Extractions interrupted by the previous shutdown (deploy, crash) are
-    # still marked "extracting". Fail them and retry once, in the background so
-    # startup isn't delayed. Errors here must never stop the app starting.
-    try:
-        for invoice_id in recover_stuck_extractions():
-            threading.Thread(target=extract_invoice, args=(invoice_id,), daemon=True).start()
-    except Exception:
-        log.exception("Startup recovery failed; continuing")
-    yield
-
-
 setup_telemetry(engine, service_version=settings.git_sha, environment=settings.app_env)
-app = FastAPI(title="Ledgerline", version="0.2.0", lifespan=lifespan, telemetry=fastapi_telemetry_config())
+app = FastAPI(title="Ledgerline", version="0.3.0", telemetry=fastapi_telemetry_config())
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.globals["fmt"] = fmt
 templates.env.globals["qty"] = qty
@@ -232,7 +215,6 @@ def list_invoices(
 
 @app.post("/invoices")
 async def upload_invoice(
-    background: BackgroundTasks,
     file: UploadFile = File(...),
     user: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
@@ -267,7 +249,14 @@ async def upload_invoice(
                  action="uploaded", after={"filename": doc.original_filename, "sha256": sha})
     session.commit()
 
-    background.add_task(extract_invoice, invoice.id)
+    # After the commit, so the worker can see the invoice. If this fails (queue
+    # unreachable, process killed right here), the invoice stays "uploaded" and
+    # app.maintenance marks it failed later, for someone to retry. Making the
+    # two writes one is the "outbox" pattern (guide 6.6).
+    try:
+        jobs.enqueue_extraction(invoice)
+    except Exception:
+        log.exception("Could not queue extraction for %s", invoice.id)
     return RedirectResponse(f"/invoices/{invoice.id}", status_code=303)
 
 
@@ -401,15 +390,14 @@ def reject_invoice(
 @app.post("/invoices/{invoice_id}/reextract")
 def reextract_invoice(
     invoice_id: str,
-    background: BackgroundTasks,
     user: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ):
     invoice = get_invoice(session, user, invoice_id)
     if invoice.status not in {"extraction_failed", "needs_review"}:
         raise HTTPException(status_code=409, detail=f"Cannot re-extract an invoice that is {invoice.status}")
-    background.add_task(extract_invoice, invoice.id)
-    return RedirectResponse(f"/invoices/{invoice_id}?message=Re-extraction+started", status_code=303)
+    jobs.enqueue_extraction(invoice)
+    return RedirectResponse(f"/invoices/{invoice_id}?message=Re-extraction+queued", status_code=303)
 
 
 # ---------------------------------------------------------------- purchase orders

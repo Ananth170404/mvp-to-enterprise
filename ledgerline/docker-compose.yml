@@ -1,26 +1,41 @@
 # Ledgerline local development stack.
 #
-# Postgres, a one-off `migrate` job, the API, and a local observability stack.
-# Migrations are their own step, like in a real deploy: the API never migrates
-# the database on start.
-# No Redis or Celery yet; those arrive in Chapter 6, when the pain is real.
+# Postgres, a one-off `migrate` job, the API, a job queue and a worker, and a
+# local observability stack. Migrations are their own step, like in a real
+# deploy: the API never migrates the database on start.
+#
+# The queue (Chapter 6) is ElasticMQ, an SQS-compatible server, so the same
+# code talks to it here and to Amazon SQS in AWS. More workers:
+#   docker compose up -d --scale worker=3
+
+x-app-environment: &app-environment
+  APP_ENV: development
+  # The app connects as a least-privilege user; migrations as the schema owner.
+  DATABASE_URL: postgresql+psycopg://ledgerline_app:${APP_DB_PASSWORD:-app-dev-pw}@db:5432/ledgerline
+  MIGRATION_DATABASE_URL: postgresql+psycopg://ledgerline:${POSTGRES_PASSWORD:-ledgerline-dev}@db:5432/ledgerline
+  STORAGE_BACKEND: local
+  STORAGE_DIR: /data/storage
+  # Traces and metrics go to the local Grafana stack (Chapter 3). In AWS the
+  # same variables point somewhere else; the code doesn't change.
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+  OTEL_SERVICE_NAME: ledgerline
+  # Background jobs go through the queue to the worker (Chapter 6). The queue
+  # and its dead-letter queue are created on first use (app/jobs.py).
+  QUEUE_BACKEND: sqs
+  SQS_ENDPOINT_URL: http://elasticmq:9324
+  JOB_QUEUE_URL: http://elasticmq:9324/000000000000/ledgerline-extraction
+  # How long a job stays hidden after a worker takes it. Short here, so a
+  # killed worker's job comes back quickly in the demo; 120 s in AWS.
+  JOB_VISIBILITY_SECONDS: 30
+  # Make the fake model as slow as a real one (0 = instant).
+  FAKE_LLM_DELAY_SECONDS: ${FAKE_LLM_DELAY_SECONDS:-10}
 
 x-app: &app
   build:
     context: .
     target: dev
   env_file: .env
-  environment:
-    APP_ENV: development
-    # The app connects as a least-privilege user; migrations as the schema owner.
-    DATABASE_URL: postgresql+psycopg://ledgerline_app:${APP_DB_PASSWORD:-app-dev-pw}@db:5432/ledgerline
-    MIGRATION_DATABASE_URL: postgresql+psycopg://ledgerline:${POSTGRES_PASSWORD:-ledgerline-dev}@db:5432/ledgerline
-    STORAGE_BACKEND: local
-    STORAGE_DIR: /data/storage
-    # Traces and metrics go to the local Grafana stack (Chapter 3). In AWS the
-    # same variables point somewhere else; the code doesn't change.
-    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
-    OTEL_SERVICE_NAME: ledgerline
+  environment: *app-environment
   volumes:
     - storage:/data/storage
     - ./data:/app/data
@@ -28,7 +43,8 @@ x-app: &app
 services:
   db:
     image: postgres:16
-        # pg_stat_statements: Postgres records every statement's calls and timings (Chapter 5). RDS loads it by default.
+    # pg_stat_statements: Postgres records every statement's calls and timings
+    # (guide Chapter 5). RDS loads it by default.
     command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all"]
     environment:
       POSTGRES_USER: ledgerline
@@ -63,12 +79,42 @@ services:
 
   api:
     <<: *app
-    
     ports:
       - "8007:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
+      elasticmq:
+        condition: service_started
+
+  # Takes extraction jobs off the queue and runs them (app/worker.py). Same
+  # image as the API, different command: one codebase, two process types.
+  worker:
+    <<: *app
+    command: python -m app.worker
+    environment:
+      <<: *app-environment
+      OTEL_SERVICE_NAME: ledgerline-worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      elasticmq:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.worker", "--check"]
+      interval: 15s
+      retries: 3
+    # On `docker compose stop`, the worker finishes its current job first
+    # (SIGTERM), like an ECS task during a deploy.
+    stop_grace_period: 2m
+    # Restarted if it exits, e.g. when it starts before the queue server is up.
+    restart: unless-stopped
+
+  # An SQS-compatible queue server for development.
+  elasticmq:
+    image: softwaremill/elasticmq-native:1.7.1
+    ports:
+      - "9324:9324"   # the SQS API, if you run the app outside Docker
 
   # Grafana's all-in-one OpenTelemetry stack, for development only: an OTLP
   # collector plus Tempo (traces), Prometheus (metrics), Loki (logs) and

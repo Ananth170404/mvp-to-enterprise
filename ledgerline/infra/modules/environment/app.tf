@@ -28,7 +28,7 @@ locals {
 
   db_secret_arn = aws_db_instance.main.master_user_secret[0].secret_arn
 
-  # Settings shared by the app and the migration task.
+  # Settings shared by the app, the worker and the migration task.
   common_environment = [
     { name = "APP_ENV", value = var.environment },
     { name = "AWS_REGION", value = var.region },
@@ -37,6 +37,10 @@ locals {
     { name = "DB_USER", value = "ledgerline_app" },
     { name = "STORAGE_BACKEND", value = "s3" },
     { name = "S3_BUCKET", value = module.documents.name },
+    # Background jobs (Chapter 6, jobs.tf): the app sends, the worker receives.
+    { name = "QUEUE_BACKEND", value = "sqs" },
+    { name = "JOB_QUEUE_URL", value = aws_sqs_queue.jobs.url },
+    { name = "JOB_VISIBILITY_SECONDS", value = tostring(local.job_visibility_seconds) },
   ]
 }
 

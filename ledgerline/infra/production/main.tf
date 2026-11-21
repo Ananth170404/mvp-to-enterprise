@@ -117,6 +117,11 @@ module "env" {
   deletion_protection = false # true with real data; false so the demo can be destroyed
 
   alert_email = var.alert_email
+
+  # Background jobs (Chapter 6): always one worker ready, so the first invoice
+  # of the morning doesn't wait minutes for a worker to start.
+  worker_min_count = 1
+  worker_max_count = 4
 }
 
 # ---------------------------------------------------------------- CI identity
