@@ -29,7 +29,7 @@ Developers who can build an MVP and want to understand what comes next: reliabil
 | 3 | [Observability](guide/03-observability.md) — and part 2: [Observability on AWS](guide/03b-observability-on-aws.md) | Draft |
 | 4 | [Deployment models and infrastructure](guide/04-deployment-models.md) — and part 2: [Deployment models in practice](guide/04b-deployment-demos.md) | Draft |
 | 5 | [The data layer](guide/05-data-layer.md) — and part 2: [The data layer in practice](guide/05b-data-layer-demos.md) | Draft |
-| 6 | Architecture evolution | Planned |
+| 6 | [Architecture evolution](guide/06-architecture-evolution.md) — and part 2: [Architecture evolution in practice](guide/06b-architecture-demos.md) | Draft |
 | 7 | Auth, identity and multi-tenancy | Planned |
 | 8 | Security | Planned |
 | 9 | LLMs in production | Planned |
