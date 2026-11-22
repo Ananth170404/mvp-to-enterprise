@@ -24,6 +24,7 @@ import sys
 from sqlalchemy import create_engine, text
 
 from app.config import settings
+from app.db import tenant_scope
 
 DRILL_TENANT = "Drill Co (restore drill)"
 DRILL_USER = "drill@drill.example"
@@ -43,7 +44,10 @@ def main() -> None:
 
 
 def _tenant_id(conn) -> str | None:
-    return conn.scalar(text("SELECT id FROM tenants WHERE name = :n"), {"n": DRILL_TENANT})
+    tenant_id = conn.scalar(text("SELECT id FROM tenants WHERE name = :n"), {"n": DRILL_TENANT})
+    if tenant_id:
+        tenant_scope(conn, tenant_id)  # row-level security: work as Drill Co (Chapter 7)
+    return tenant_id
 
 
 def prepare(engine) -> None:
@@ -59,6 +63,7 @@ def prepare(engine) -> None:
                         VALUES (gen_random_uuid()::text, :t, :e, 'Drill user', 'approver')"""),
                 {"t": tenant_id, "e": DRILL_USER},
             )
+            tenant_scope(conn, tenant_id)
         existing = conn.scalar(text("SELECT count(*) FROM invoices WHERE tenant_id = :t"), {"t": tenant_id})
         if existing:
             print(f"Drill Co already has {existing} invoices; nothing to do.")

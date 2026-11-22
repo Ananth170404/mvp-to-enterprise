@@ -94,6 +94,7 @@ data "aws_iam_policy_document" "read_secrets" {
       aws_ssm_parameter.site_password.arn,
       aws_ssm_parameter.gemini_api_key.arn,
       aws_ssm_parameter.sentry_dsn.arn,
+      aws_ssm_parameter.oidc_client_secret.arn,
     ]
   }
   statement {
@@ -163,10 +164,10 @@ resource "aws_ecs_task_definition" "app" {
     # health check, so waiting for healthy would hang the deploy).
     dependsOn = [{ containerName = "cloudwatch-agent", condition = "START" }]
 
-    environment = concat(local.common_environment, [
+    environment = concat(local.common_environment, local.oidc_environment, [
       { name = "LLM_PROVIDER", value = var.llm_provider },
-      # Demo login: pick any seeded user. Staging only; the app refuses it in
-      # production (app/config.py), where real authentication arrives in Chapter 7.
+      # Demo login: pick any seeded user, no password. Off once real sign-in
+      # exists (Chapter 7); the app refuses it in production (app/config.py).
       { name = "DEV_LOGIN", value = var.dev_login ? "true" : "false" },
       # OpenTelemetry: the same variables as local development, a different address.
       { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://localhost:4318" },
@@ -180,6 +181,7 @@ resource "aws_ecs_task_definition" "app" {
       { name = "SITE_PASSWORD", valueFrom = aws_ssm_parameter.site_password.arn },
       { name = "GEMINI_API_KEY", valueFrom = aws_ssm_parameter.gemini_api_key.arn },
       { name = "SENTRY_DSN", valueFrom = aws_ssm_parameter.sentry_dsn.arn },
+      { name = "OIDC_CLIENT_SECRET", valueFrom = aws_ssm_parameter.oidc_client_secret.arn },
     ]
 
     # Liveness (guide 2.8): restart the container if the process stops answering.
@@ -386,8 +388,8 @@ resource "aws_ecs_service" "app" {
   desired_count = 0
 
   network_configuration {
-    subnets          = var.app_subnet_ids
-    security_groups  = [aws_security_group.app.id]
+    subnets         = var.app_subnet_ids
+    security_groups = [aws_security_group.app.id]
     # Staging: public IPs to reach ECR, S3 and Gemini without a NAT gateway.
     # Production: private subnets, outbound through NAT.
     assign_public_ip = var.assign_public_ip

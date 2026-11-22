@@ -40,6 +40,9 @@ def _settings(**overrides) -> Settings:
         aws_region="ap-south-1", llm_provider="gemini", llm_model="m", gemini_api_key="k", dev_login=False,
         site_password=None, max_upload_bytes=1, fake_llm_manifest=None, stuck_after_minutes=10,
         queue_backend="sqs", job_queue_url="https://sqs.example/123/q",
+        oidc_discovery_url="https://idp.example/.well-known/openid-configuration", oidc_client_id="c",
+        oidc_client_secret="s", public_base_url="https://app.example", oidc_logout_url=None,
+        session_hours=12, session_idle_minutes=120,
     )
     base.update(overrides)
     return Settings(**base)
@@ -63,6 +66,12 @@ def test_deployed_environments_refuse_unsafe_shortcuts():
         validate(_settings(app_env="staging", storage_backend="local"))
     with pytest.raises(RuntimeError, match="APP_ENV"):
         validate(_settings(app_env="prod"))
+    with pytest.raises(RuntimeError, match="real sign-in"):
+        validate(_settings(oidc_discovery_url=None))
+    with pytest.raises(RuntimeError, match="OIDC_CLIENT_SECRET"):
+        validate(_settings(oidc_client_secret=None))
+    with pytest.raises(RuntimeError, match="PUBLIC_BASE_URL"):
+        validate(_settings(public_base_url="http://app.example"))
     with pytest.raises(RuntimeError, match="QUEUE_BACKEND=sqs"):
         validate(_settings(app_env="staging", queue_backend="inline"))
     with pytest.raises(RuntimeError, match="JOB_QUEUE_URL"):

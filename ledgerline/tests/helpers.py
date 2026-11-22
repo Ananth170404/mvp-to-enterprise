@@ -5,7 +5,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.auth import COOKIE
+from app.auth import COOKIE, create_session
+from app.db import SessionLocal
 from app.main import app
 from app.models import User
 
@@ -13,8 +14,14 @@ GENERATED = Path(os.environ["FAKE_LLM_MANIFEST"]).parent
 
 
 def client_for(user: User) -> TestClient:
+    """A test client signed in as this user (a real session, as the dev login creates)."""
+    session = SessionLocal()
+    try:
+        token = create_session(session, session.get(User, user.id), "dev", "pytest")
+    finally:
+        session.close()
     client = TestClient(app)
-    client.cookies.set(COOKIE, user.id)
+    client.cookies.set(COOKIE, token)
     return client
 
 

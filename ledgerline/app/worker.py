@@ -123,8 +123,20 @@ class Worker:
         self._last_sweep = time.monotonic()
         try:
             recover_stuck_extractions()
+            _expire_sessions()
         except Exception:
             log.exception("Stuck-extraction sweep failed; continuing")
+
+
+def _expire_sessions() -> None:
+    from app.auth import delete_expired
+    from app.db import SessionLocal
+
+    session = SessionLocal()
+    try:
+        delete_expired(session)
+    finally:
+        session.close()
 
 
 class _Heartbeat:

@@ -232,3 +232,11 @@ output "job_dead_letter_queue_url" {
 output "worker_service" {
   value = module.env.worker_service
 }
+
+output "cognito_user_pool_id" {
+  value = module.env.cognito_user_pool_id
+}
+
+output "sign_in_domain" {
+  value = module.env.sign_in_domain
+}

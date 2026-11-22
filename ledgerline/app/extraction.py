@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app import checks, workflow
 from app.config import settings
-from app.db import SessionLocal
+from app.db import SessionLocal, set_tenant
 from app.extraction_schema import EXTRACTION_PROMPT, PROMPT_VERSION, ExtractedInvoice, json_schema
 from app.llm import Attachment, LLMError, get_provider
 from app.models import ExtractionRun, Invoice, InvoiceLine, utcnow
@@ -43,6 +43,7 @@ def extract_invoice(
     expected_version: str | None = None,
     reclaim_after_seconds: float | None = None,
     session_factory=SessionLocal,
+    tenant_id: str | None = None,
 ) -> None:
     """Extract one invoice, as its own trace, linked to the request that asked.
 
@@ -59,7 +60,7 @@ def extract_invoice(
         attributes={"ledgerline.invoice_id": invoice_id},
     ) as span:
         started = time.perf_counter()
-        outcome = _extract(invoice_id, expected_version, reclaim_after_seconds, session_factory)
+        outcome = _extract(invoice_id, expected_version, reclaim_after_seconds, session_factory, tenant_id)
         span.set_attribute("ledgerline.extraction.outcome", outcome)
         if outcome in {"needs_review", "extraction_failed"}:
             attrs = {"outcome": outcome, "llm_provider": settings.llm_provider}
@@ -72,11 +73,14 @@ def extract_invoice(
         )
 
 
-def _extract(invoice_id: str, expected_version, reclaim_after_seconds, session_factory) -> str:
+def _extract(invoice_id: str, expected_version, reclaim_after_seconds, session_factory, tenant_id=None) -> str:
     """Returns the outcome: needs_review | extraction_failed | skipped | not_found."""
     from app.jobs import version_of  # app.jobs imports this module lazily; avoid a cycle
 
     session: Session = session_factory()
+    # Row-level security (Chapter 7): the worker sees only the job's tenant.
+    # A job without one finds nothing in Postgres, and ends as "not_found".
+    set_tenant(session, tenant_id)
     try:
         # Lock the row: if two workers (or a retry and a recovery sweep) pick up
         # the same invoice, the second waits here, then sees "extracting" and skips.

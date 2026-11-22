@@ -11,7 +11,9 @@ a web server's memory and CPU while it waited. Now:
 A job message is small JSON: what to do, to which record, and the version of
 the record when it was asked for:
 
-    {"type": "extract_invoice", "invoice_id": "…", "version": "2026-11-14T06:35:12.123456"}
+    {"type": "extract_invoice", "tenant_id": "…", "invoice_id": "…", "version": "2026-11-14T06:35:12.123456"}
+
+The tenant scopes the worker's database access (row-level security, Chapter 7).
 
 The version (the invoice's status_changed_at) makes a job safe to deliver
 twice, which SQS can do: if the invoice has changed since the job was queued,
@@ -60,7 +62,8 @@ def version_of(invoice: Invoice) -> str:
 def enqueue_extraction(invoice: Invoice) -> None:
     """Ask for this invoice to be extracted. Call AFTER the transaction that
     created or changed it has committed: a worker must be able to see it."""
-    send({"type": EXTRACT_INVOICE, "invoice_id": invoice.id, "version": version_of(invoice)})
+    send({"type": EXTRACT_INVOICE, "tenant_id": invoice.tenant_id, "invoice_id": invoice.id,
+          "version": version_of(invoice)})
 
 
 def send(job: dict) -> None:
@@ -96,6 +99,7 @@ def run(body: str, carrier: dict[str, str], attempt: int) -> None:
             extract_invoice(
                 job["invoice_id"],
                 expected_version=job.get("version"),
+                tenant_id=job.get("tenant_id"),
                 # A second delivery means an earlier attempt stopped part-way
                 # (worker killed, crashed). Allow taking over its "extracting".
                 reclaim_after_seconds=settings.job_visibility_seconds if attempt > 1 else None,

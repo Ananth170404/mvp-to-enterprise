@@ -12,6 +12,12 @@ google-genai
 pydantic
 boto3
 
+# Sign-in (Chapter 7): OpenID Connect against Cognito (AWS) or Keycloak (local).
+# httpx fetches the provider's discovery document, keys and tokens; PyJWT
+# verifies the ID token's signature and claims.
+httpx
+pyjwt[crypto]
+
 # Observability (Chapter 3). FastAPI traces requests itself (native
 # OpenTelemetry); these add the SDK, the OTLP exporter, and spans for outbound
 # HTTP. Instrumentation packages are versioned 0.x "b" (beta) even when stable

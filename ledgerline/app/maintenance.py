@@ -27,8 +27,8 @@ from sqlalchemy import and_, or_, select
 
 from app import workflow
 from app.config import settings
-from app.db import SessionLocal
-from app.models import Invoice, utcnow
+from app.db import SessionLocal, set_tenant
+from app.models import Invoice, Tenant, utcnow
 
 log = logging.getLogger("ledgerline.maintenance")
 
@@ -39,10 +39,34 @@ NEVER_STARTED_AFTER_MINUTES = 60
 
 
 def recover_stuck_extractions(older_than_minutes: int | None = None, session_factory=SessionLocal) -> list[str]:
+    return [invoice_id for _, invoice_id in _recover(older_than_minutes, session_factory)]
+
+
+def _recover(older_than_minutes: int | None, session_factory) -> list[tuple[str, str]]:
+    """Returns (tenant_id, invoice_id) for each invoice marked failed."""
+    recovered: list[tuple[str, str]] = []
+    session = session_factory()
+    try:
+        # The tenants table isn't tenant-scoped; everything else is (row-level
+        # security, Chapter 7). A system job works through tenants one at a time,
+        # with the same restricted access as a request, rather than with a
+        # database user that can see everything.
+        tenant_ids = session.scalars(select(Tenant.id)).all()
+    finally:
+        session.close()
+    for tenant_id in tenant_ids:
+        recovered += [(tenant_id, i) for i in _recover_tenant(tenant_id, older_than_minutes, session_factory)]
+    if recovered:
+        log.warning("Recovered %d stuck extraction(s): %s", len(recovered), ", ".join(i for _, i in recovered))
+    return recovered
+
+
+def _recover_tenant(tenant_id: str, older_than_minutes: int | None, session_factory) -> list[str]:
     minutes = older_than_minutes if older_than_minutes is not None else settings.stuck_after_minutes
     cutoff = utcnow() - timedelta(minutes=minutes)
     never_started = utcnow() - timedelta(minutes=max(minutes, NEVER_STARTED_AFTER_MINUTES))
     session = session_factory()
+    set_tenant(session, tenant_id)
     recovered: list[str] = []
     try:
         # SKIP LOCKED: if two instances start at once, each row is handled by one of them.
@@ -52,6 +76,7 @@ def recover_stuck_extractions(older_than_minutes: int | None = None, session_fac
                 and_(Invoice.status == "extracting", Invoice.status_changed_at < cutoff),
                 and_(Invoice.status == "uploaded", Invoice.status_changed_at < never_started),
             ))
+            .where(Invoice.tenant_id == tenant_id)
             .with_for_update(skip_locked=True)
         ).all()
         for invoice in stuck:
@@ -62,9 +87,32 @@ def recover_stuck_extractions(older_than_minutes: int | None = None, session_fac
         session.commit()
     finally:
         session.close()
-    if recovered:
-        log.warning("Recovered %d stuck extraction(s): %s", len(recovered), ", ".join(recovered))
     return recovered
+
+
+def unlink_identity(email: str) -> None:
+    """The next sign-in with this verified email links the new identity.
+    Use when a person's identity at the provider was recreated: a new
+    provider, a deleted and re-created account. Ends their sessions too."""
+    from app.models import User, UserSession
+
+    session = SessionLocal()
+    try:
+        user = session.scalar(select(User).where(User.email == email.strip().lower()))
+        if user is None:
+            raise SystemExit(f"No user {email}")
+        set_tenant(session, user.tenant_id)
+        old = user.oidc_subject
+        user.oidc_subject = None
+        session.query(UserSession).filter(UserSession.user_id == user.id).delete()
+        from app import audit
+
+        audit.record(session, tenant_id=user.tenant_id, actor_id=None, entity="user", entity_id=user.id,
+                     action="identity_unlinked", before={"oidc_subject": old})
+        session.commit()
+        print(f"Unlinked {email} (was {old}); their sessions are ended.")
+    finally:
+        session.close()
 
 
 def main() -> None:
@@ -76,21 +124,29 @@ def main() -> None:
     stuck = sub.add_parser("recover-stuck", help="Fail (and optionally retry) extractions that never finished")
     stuck.add_argument("--minutes", type=int, default=None)
     stuck.add_argument("--retry", action="store_true")
+    unlink = sub.add_parser("unlink-identity",
+                            help="Forget which sign-in identity a user is linked to (e.g. after an identity-provider change)")
+    unlink.add_argument("--email", required=True)
     args = parser.parse_args()
 
+    if args.command == "unlink-identity":
+        unlink_identity(args.email)
+        return
+
     if args.command == "recover-stuck":
-        ids = recover_stuck_extractions(args.minutes)
-        print(f"Recovered {len(ids)} stuck extraction(s)")
+        recovered = _recover(args.minutes, SessionLocal)
+        print(f"Recovered {len(recovered)} stuck extraction(s)")
         if args.retry:
             from app import jobs
 
-            session = SessionLocal()
-            try:
-                for invoice_id in ids:
+            for tenant_id, invoice_id in recovered:
+                session = SessionLocal()
+                set_tenant(session, tenant_id)
+                try:
                     jobs.enqueue_extraction(session.get(Invoice, invoice_id))
-            finally:
-                session.close()
-            print(f"Queued {len(ids)} invoice(s) for extraction again")
+                finally:
+                    session.close()
+            print(f"Queued {len(recovered)} invoice(s) for extraction again")
 
 
 if __name__ == "__main__":

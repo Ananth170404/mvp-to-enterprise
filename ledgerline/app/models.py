@@ -58,6 +58,39 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(200))
     # v0 roles: "clerk" can upload and edit, "approver" can also approve.
     role: Mapped[str] = mapped_column(String(20), default="clerk")
+    # Chapter 7: the identity provider's permanent ID for this person (the
+    # OIDC "sub"), linked on their first sign-in. Email addresses change and
+    # get reused; this doesn't.
+    oidc_subject: Mapped[str | None] = mapped_column(String(255), unique=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserSession(Base):
+    """A signed-in browser. The cookie holds a random token; only its SHA-256
+    is stored, so a copy of this table can't be used to sign in."""
+
+    __tablename__ = "sessions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(token), hex
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    method: Mapped[str] = mapped_column(String(20))  # oidc | dev
+    user_agent: Mapped[str | None] = mapped_column(String(300))
+    # The provider's ID token, kept only to sign out there too ("id_token_hint").
+    id_token: Mapped[str | None] = mapped_column(Text)
+
+
+class LoginRequest(Base):
+    """One sign-in in progress: what we must check when the provider sends the
+    browser back. Deleted when used; useless after 10 minutes."""
+
+    __tablename__ = "login_requests"
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    nonce: Mapped[str] = mapped_column(String(64))
+    code_verifier: Mapped[str] = mapped_column(String(128))
+    return_to: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Vendor(Base):

@@ -58,6 +58,7 @@ cryptography==50.0.2
     #   -c requirements.txt
     #   google-auth
     #   moto
+    #   pyjwt
 cyclonedx-python-lib==11.12.0
     # via pip-audit
 defusedxml==0.7.1
@@ -99,6 +100,7 @@ httpx==0.28.1
     # via
     #   -c requirements.txt
     #   -r requirements-dev.in
+    #   -r requirements.in
     #   google-genai
 idna==3.20
     # via
@@ -260,6 +262,10 @@ pygments==2.21.0
     # via
     #   pytest
     #   rich
+pyjwt==2.15.1
+    # via
+    #   -c requirements.txt
+    #   -r requirements.in
 pyparsing==3.3.3
     # via pip-requirements-parser
 pypdfium2==5.14.0

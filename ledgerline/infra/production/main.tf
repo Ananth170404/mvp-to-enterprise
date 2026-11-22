@@ -106,8 +106,8 @@ module "env" {
 
   # Production settings the app itself enforces (app/config.py): the fake LLM
   # and the demo login are refused when APP_ENV=production, and demo data is
-  # never seeded. Until real authentication (Chapter 7), production serves
-  # health checks and answers app pages with "Authentication is not configured".
+  # never seeded. Sign-in is Cognito (cognito.tf in the module, Chapter 7);
+  # users must be created (invited) before they can sign in.
   llm_provider   = "gemini" # key in /ledgerline/production/gemini_api_key (placeholder until set)
   dev_login      = false
   seed_demo_data = false

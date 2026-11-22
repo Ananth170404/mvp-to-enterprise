@@ -62,6 +62,18 @@ class Settings:
     llm_model: str
     gemini_api_key: str | None
     dev_login: bool
+    # Real sign-in (Chapter 7): OpenID Connect. Set the discovery URL to turn it
+    # on; Cognito in AWS, Keycloak in local Docker. Both can be on in
+    # development, so the seeded users stay one click away.
+    oidc_discovery_url: str | None
+    oidc_client_id: str | None
+    oidc_client_secret: str | None
+    # Where the provider sends people back. Must match what's registered with it.
+    public_base_url: str | None
+    # Providers that don't advertise a logout endpoint (Cognito) need it given.
+    oidc_logout_url: str | None
+    session_hours: int  # absolute: sign in again after this, whatever happens
+    session_idle_minutes: int  # signed out after this long without a request
     site_password: str | None  # shared password in front of a non-production deploy
     max_upload_bytes: int
     fake_llm_manifest: Path
@@ -109,6 +121,13 @@ def load_settings() -> Settings:
         llm_model=os.getenv("LLM_MODEL", "gemini-3.5-flash-lite"),
         gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
         dev_login=_bool(os.getenv("DEV_LOGIN"), default=True),
+        oidc_discovery_url=os.getenv("OIDC_DISCOVERY_URL") or None,
+        oidc_client_id=os.getenv("OIDC_CLIENT_ID") or None,
+        oidc_client_secret=os.getenv("OIDC_CLIENT_SECRET") or None,
+        public_base_url=(os.getenv("PUBLIC_BASE_URL") or "").rstrip("/") or None,
+        oidc_logout_url=os.getenv("OIDC_LOGOUT_URL") or None,
+        session_hours=int(os.getenv("SESSION_HOURS", "12")),
+        session_idle_minutes=int(os.getenv("SESSION_IDLE_MINUTES", "120")),
         site_password=os.getenv("SITE_PASSWORD") or None,
         max_upload_bytes=int(os.getenv("MAX_UPLOAD_MB", "10")) * 1024 * 1024,
         fake_llm_manifest=Path(os.getenv("FAKE_LLM_MANIFEST", base / "data" / "generated" / "manifest.json")),
@@ -137,6 +156,12 @@ def validate(s: Settings) -> None:
         raise RuntimeError("LLM_PROVIDER=fake is not allowed in production.")
     # A staging URL on the internet is reachable by anyone. With dev login on,
     # anyone could act as any user, so a deployed dev login needs a gate.
+    if s.oidc_discovery_url and not (s.oidc_client_id and s.oidc_client_secret):
+        raise RuntimeError("OIDC_DISCOVERY_URL requires OIDC_CLIENT_ID and OIDC_CLIENT_SECRET.")
+    if s.is_deployed and s.oidc_discovery_url and not (s.public_base_url or "").startswith("https://"):
+        raise RuntimeError("Deployed sign-in requires PUBLIC_BASE_URL, starting with https://.")
+    if s.is_production and not s.oidc_discovery_url:
+        raise RuntimeError("Production requires real sign-in (OIDC_DISCOVERY_URL).")
     if s.is_deployed and s.dev_login and not s.site_password:
         raise RuntimeError("DEV_LOGIN on a deployed environment requires SITE_PASSWORD.")
     # Container disks are thrown away on every deploy; files must live in S3.

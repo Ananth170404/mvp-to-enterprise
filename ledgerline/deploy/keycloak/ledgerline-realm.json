@@ -1,0 +1,103 @@
+{
+  "realm": "ledgerline",
+  "displayName": "Ledgerline (local development)",
+  "enabled": true,
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "bruteForceProtected": true,
+  "failureFactor": 5,
+  "ssoSessionIdleTimeout": 7200,
+  "ssoSessionMaxLifespan": 43200,
+  "clients": [
+    {
+      "clientId": "ledgerline",
+      "name": "Ledgerline web app",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "local-dev-client-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8000/auth/callback",
+        "http://localhost:8007/auth/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:8000/login##http://localhost:8007/login"
+      }
+    }
+  ],
+  "users": [
+    {
+      "id": "6f1c2a54-0000-4000-8000-000000000001",
+      "username": "priya@acme.example",
+      "email": "priya@acme.example",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Priya",
+      "lastName": "Acme",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "priya-local-pw",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "6f1c2a54-0000-4000-8000-000000000002",
+      "username": "arjun@acme.example",
+      "email": "arjun@acme.example",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Arjun",
+      "lastName": "Acme",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "arjun-local-pw",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "6f1c2a54-0000-4000-8000-000000000003",
+      "username": "meera@globex.example",
+      "email": "meera@globex.example",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Meera",
+      "lastName": "Globex",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "meera-local-pw",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "6f1c2a54-0000-4000-8000-000000000004",
+      "username": "outsider@example.com",
+      "email": "outsider@example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Olivia",
+      "lastName": "Outsider",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "outsider-local-pw",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

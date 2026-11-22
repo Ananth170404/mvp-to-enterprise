@@ -1,5 +1,5 @@
 output "url" {
-  description = "Open this. Username: anything; password: the site_password parameter."
+  description = "Open this. The browser first asks for the shared site password (any username), then the app's sign-in (Cognito)."
   value       = "https://${aws_cloudfront_distribution.app.domain_name}"
 }
 
@@ -57,4 +57,13 @@ output "job_dead_letter_queue_url" {
 
 output "worker_service" {
   value = aws_ecs_service.worker.name
+}
+
+output "cognito_user_pool_id" {
+  description = "Create users here (guide 7B): aws cognito-idp admin-create-user --user-pool-id <this> ..."
+  value       = aws_cognito_user_pool.main.id
+}
+
+output "sign_in_domain" {
+  value = "https://${aws_cognito_user_pool_domain.main.domain}.auth.${var.region}.amazoncognito.com"
 }

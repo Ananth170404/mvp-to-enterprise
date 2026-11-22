@@ -54,9 +54,9 @@ variable "cloudwatch_agent_image" {
 }
 
 variable "dev_login" {
-  description = "The demo 'pick a user' login. The app refuses it when APP_ENV=production."
+  description = "The demo 'pick a user' login, next to real sign-in (Cognito). The app refuses it when APP_ENV=production."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "seed_demo_data" {

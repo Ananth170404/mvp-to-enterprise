@@ -88,6 +88,14 @@ jobs:
         run: alembic downgrade base && alembic upgrade head
       - name: Least-privilege app user can be created
         run: python -m app.db_roles
+      - name: Tenants are isolated in the database (row-level security, Chapter 7)
+        # As the app's own database user: a query without a tenant filter, an
+        # update of another tenant's row and a write into another tenant must
+        # all find nothing or be refused.
+        run: python -m scripts.rls_check
+        env:
+          APP_ENV: development
+          DATABASE_URL: postgresql+psycopg://ledgerline_app:ci-only-app@localhost:5432/ledgerline
       - name: Two migration runs at once don't collide
         run: |
           alembic downgrade base

@@ -21,7 +21,7 @@ docker compose run --rm --no-deps api python -m scripts.generate_invoices   # 30
 docker compose up --build
 ```
 
-`docker compose up` starts Postgres, runs the one-off `migrate` job (migrations, then the restricted app user, then demo data), and only then starts the API and the **worker**. Uploads put an extraction job on a queue (ElasticMQ, an SQS-compatible server); the worker takes it off and does the slow part. Open http://localhost:8000 and sign in as **Priya (clerk)** or **Arjun (approver)**.
+`docker compose up` starts Postgres, runs the one-off `migrate` job (migrations, then the restricted app user, then demo data), and only then starts the API and the **worker**. Uploads put an extraction job on a queue (ElasticMQ, an SQS-compatible server); the worker takes it off and does the slow part. Open http://localhost:8000 and sign in: **Sign in** goes to a local Keycloak (the stand-in for staging's Amazon Cognito; users and passwords in [`deploy/keycloak/README.md`](deploy/keycloak/README.md)), and the development sign-in below it picks a seeded user without a password.
 
 On Linux, if the generator can't write to `data/`, run `sudo chown 1000 data` (the container runs as a non-root user).
 
@@ -32,6 +32,8 @@ Things to try:
 - Upload a `duplicate-…` file after its original: flagged as a duplicate.
 - Approve an invoice with errors as Arjun: you have to give a reason, and it's in the audit trail.
 - Switch to **Meera (Globex)**: she sees none of Acme's invoices.
+- Sign in as `outsider@example.com`: Keycloak knows her, Ledgerline doesn't (nobody invited her), so she gets no account (guide Chapter 7).
+- `docker compose run --rm api python -m scripts.rls_check`: the database itself refuses to show or change another tenant's rows, even to a query that forgot its tenant filter.
 - Stop the database (`docker compose stop db`) and compare http://localhost:8000/livez with http://localhost:8000/readyz.
 - Upload, then `docker compose kill worker` while the invoice says "extracting"; `docker compose up -d worker`, and about 30 seconds later the job is retried (guide Chapter 6).
 - `docker compose up -d --scale worker=3`, then `docker compose run --rm api python -m scripts.upload_many --count 20 --url http://api:8000`, and watch `docker compose run --rm api python -m app.jobs status`.
@@ -114,7 +116,8 @@ app/
   maintenance.py       sweep for extractions that never finished
   db_roles.py          creates the least-privilege app database user
   llm/                 provider wrapper: gemini, fake, pricing table
-  auth.py              DEV-ONLY login (replaced in Chapter 7)
+  auth.py              sign-in: OpenID Connect (Cognito / Keycloak), sessions; the dev login
+  db.py                database sessions, and the tenant context row-level security reads
   storage.py           local disk or S3, same interface
 migrations/            Alembic; advisory-locked; audit log protected by a DB trigger
 scripts/
@@ -124,6 +127,9 @@ scripts/
   load_volume.py       a million synthetic invoices, for performance work (Chapter 5)
   explain_queries.py   EXPLAIN + pg_stat_statements for the app's queries
   upload_many.py       a batch of fresh uploads, to make work for the workers (Chapter 6)
+  rls_check.py         proves the database keeps tenants apart (Chapter 7; CI runs it)
+  drill.ps1            runs app.drill as a one-off ECS task (Chapter 5)
+deploy/keycloak/       the local identity provider's realm: users, the app's client
   db_roles.sql         the app user's permissions
 tests/
 Dockerfile             `runtime` image (ships) and `dev` image (compose)
@@ -131,4 +137,4 @@ Dockerfile             `runtime` image (ships) and `dev` image (compose)
 
 ## What it deliberately doesn't do yet
 
-Real authentication, email ingestion, ERP integration, payments, agents taking actions. Each has a chapter.
+Single sign-on with customers' own identity providers, email ingestion, ERP integration, payments, agents taking actions. Each has a chapter.

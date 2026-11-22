@@ -10,7 +10,7 @@ import logging
 import secrets
 from datetime import date
 from pathlib import Path
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -18,8 +18,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app import audit, checks, jobs, queries, workflow
-from app.auth import COOKIE, CurrentUser, LoginRequired, current_user
+from app import audit, auth, checks, jobs, queries, workflow
+from app.auth import COOKIE, STATE_COOKIE, CurrentUser, LoginRequired, SignInFailed, current_user
 from app.config import settings
 from app.db import engine, get_session
 from app.models import AuditEvent, Document, Invoice, User
@@ -72,7 +72,8 @@ async def site_password_gate(request: Request, call_next):
 
     The cheap version of "staging must not be public". It sits in front of
     everything except health checks, which the load balancer calls without it.
-    Replaced by real authentication in Chapter 7.
+    Real sign-in (Chapter 7) works behind it; the gate stays on staging as a
+    second lock, because staging runs unreleased code.
     """
     if settings.site_password and request.url.path not in UNGATED_PATHS:
         supplied = ""
@@ -96,7 +97,15 @@ app.middleware("http")(request_context_middleware)
 
 @app.exception_handler(LoginRequired)
 def _login_redirect(request: Request, exc: LoginRequired):
-    return RedirectResponse("/login", status_code=303)
+    # Back to where they were going after signing in (GET pages only).
+    target = request.url.path if request.method == "GET" else "/invoices"
+    return RedirectResponse(f"/login?{urlencode({'next': target})}", status_code=303)
+
+
+@app.exception_handler(SignInFailed)
+def _sign_in_failed(request: Request, exc: SignInFailed):
+    return templates.TemplateResponse(request, "login.html", _login_context(request, error=str(exc)),
+                                      status_code=exc.status)
 
 
 def get_invoice(session: Session, user: CurrentUser, invoice_id: str) -> Invoice:
@@ -167,27 +176,73 @@ def root():
     return RedirectResponse("/invoices", status_code=303)
 
 
+# Session cookies: not readable by JavaScript (httponly), not sent on cross-site
+# POSTs (samesite=lax, which is also what stops cross-site form submissions
+# acting as the user), and only over HTTPS wherever the site is HTTPS.
+def _cookie_args() -> dict:
+    secure = settings.is_deployed or (settings.public_base_url or "").startswith("https://")
+    return {"httponly": True, "samesite": "lax", "secure": secure}
+
+
+def _login_context(request: Request, session: Session | None = None, error: str | None = None) -> dict:
+    users = []
+    if settings.dev_login and session is not None:
+        users = session.scalars(select(User).order_by(User.tenant_id, User.role)).all()
+    return {"users": users, "oidc": auth.oidc_enabled(), "dev_login": settings.dev_login, "error": error,
+            "next": auth.safe_return_to(request.query_params.get("next"))}
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, session: Session = Depends(get_session)):
-    if not settings.dev_login:
-        raise HTTPException(status_code=404)
-    users = session.scalars(select(User).order_by(User.tenant_id, User.role)).all()
-    return templates.TemplateResponse(request, "login.html", {"users": users})
+    if not (settings.dev_login or auth.oidc_enabled()):
+        raise HTTPException(status_code=501, detail="No sign-in method is configured.")
+    return templates.TemplateResponse(request, "login.html", _login_context(request, session))
 
 
 @app.post("/login")
-def login(user_id: str = Form(...), session: Session = Depends(get_session)):
-    if not settings.dev_login or session.get(User, user_id) is None:
+def dev_login(request: Request, user_id: str = Form(...), next: str = Form("/invoices"),
+              session: Session = Depends(get_session)):
+    user = session.get(User, user_id) if settings.dev_login else None
+    if user is None:
         raise HTTPException(status_code=400)
-    response = RedirectResponse("/invoices", status_code=303)
-    # secure: deployed environments are HTTPS-only, so never send the cookie over plain HTTP.
-    response.set_cookie(COOKIE, user_id, httponly=True, samesite="lax", secure=settings.is_deployed)
+    token = auth.create_session(session, user, "dev", request.headers.get("user-agent"))
+    response = RedirectResponse(auth.safe_return_to(next), status_code=303)
+    response.set_cookie(COOKIE, token, max_age=settings.session_hours * 3600, **_cookie_args())
+    return response
+
+
+@app.get("/auth/login")
+def oidc_login(request: Request, next: str | None = None, session: Session = Depends(get_session)):
+    if not auth.oidc_enabled():
+        raise HTTPException(status_code=404)
+    url, state = auth.begin_login(session, request, next)
+    response = RedirectResponse(url, status_code=303)
+    response.set_cookie(STATE_COOKIE, state, max_age=600, **_cookie_args())
+    return response
+
+
+@app.get("/auth/callback")
+def oidc_callback(request: Request, code: str | None = None, state: str | None = None,
+                  error: str | None = None, session: Session = Depends(get_session)):
+    if not auth.oidc_enabled():
+        raise HTTPException(status_code=404)
+    if error or not code:
+        raise SignInFailed("Sign-in was cancelled or refused by the sign-in service.")
+    user, return_to, id_token = auth.finish_login(session, request, code, state or "")
+    token = auth.create_session(session, user, "oidc", request.headers.get("user-agent"), id_token)
+    response = RedirectResponse(return_to, status_code=303)
+    response.set_cookie(COOKIE, token, max_age=settings.session_hours * 3600, **_cookie_args())
+    response.delete_cookie(STATE_COOKIE)
     return response
 
 
 @app.post("/logout")
-def logout():
-    response = RedirectResponse("/login", status_code=303)
+def logout(request: Request, session: Session = Depends(get_session)):
+    ended = auth.end_session(session, request.cookies.get(COOKIE))
+    # Signed in through the provider: sign out there too, or the next "Sign in"
+    # would let them straight back in without a password.
+    target = (auth.logout_url(request, ended.id_token) if ended and ended.method == "oidc" else None) or "/login"
+    response = RedirectResponse(target, status_code=303)
     response.delete_cookie(COOKIE)
     return response
 

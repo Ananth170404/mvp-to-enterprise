@@ -8,8 +8,8 @@
 
 Each run generates NEW invoices (a random seed), because uploading the same
 file twice is, by design, the same invoice (app/main.py). It signs in with
-the development login, so it only works where DEV_LOGIN is on: development and
-staging, never production. Uploads are quick; the extraction happens later, on
+the development login, so it only works where DEV_LOGIN is on: local
+development (and staging before Chapter 7 turned the dev login off there). Uploads are quick; the extraction happens later, on
 the workers, which is the point.
 """
 

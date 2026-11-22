@@ -29,6 +29,12 @@ x-app-environment: &app-environment
   JOB_VISIBILITY_SECONDS: 30
   # Make the fake model as slow as a real one (0 = instant).
   FAKE_LLM_DELAY_SECONDS: ${FAKE_LLM_DELAY_SECONDS:-10}
+  # Real sign-in (Chapter 7) against the local Keycloak below. The app fetches
+  # this from inside Docker (keycloak:8180); your browser is sent to
+  # localhost:8180. The development login stays on too, next to it.
+  OIDC_DISCOVERY_URL: http://keycloak:8180/realms/ledgerline/.well-known/openid-configuration
+  OIDC_CLIENT_ID: ledgerline
+  OIDC_CLIENT_SECRET: local-dev-client-secret  # local only; see deploy/keycloak/README.md
 
 x-app: &app
   build:
@@ -86,6 +92,8 @@ services:
         condition: service_completed_successfully
       elasticmq:
         condition: service_started
+      keycloak:
+        condition: service_started
 
   # Takes extraction jobs off the queue and runs them (app/worker.py). Same
   # image as the API, different command: one codebase, two process types.
@@ -109,6 +117,26 @@ services:
     stop_grace_period: 2m
     # Restarted if it exits, e.g. when it starts before the queue server is up.
     restart: unless-stopped
+
+  # A local identity provider, standing in for Amazon Cognito (Chapter 7).
+  # Users and passwords: deploy/keycloak/README.md. Admin console:
+  # http://localhost:8180/admin (admin / admin). Its data lives in the
+  # container, so the realm is imported fresh whenever the container is new.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4.5
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTP_PORT: "8180"
+      # Browsers use localhost:8180; the app reaches it as keycloak:8180, and
+      # gets server-to-server URLs (tokens, keys) for the name it used.
+      KC_HOSTNAME: http://localhost:8180
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    ports:
+      - "8180:8180"
+    volumes:
+      - ./deploy/keycloak/ledgerline-realm.json:/opt/keycloak/data/import/ledgerline-realm.json:ro
 
   # An SQS-compatible queue server for development.
   elasticmq:

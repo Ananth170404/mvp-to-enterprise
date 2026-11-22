@@ -151,8 +151,9 @@ def test_sentry_events_carry_request_and_trace_ids():
 
 def test_database_queries_are_spans_without_values(db):
     _, users = db
+    client = client_for(users["clerk"])  # signing in runs queries of its own, outside the request
     SPANS.clear()
-    client_for(users["clerk"]).get("/invoices")
+    client.get("/invoices")
     spans = SPANS.get_finished_spans()
     request = next(s for s in spans if s.attributes.get("http.route") == "/invoices")
     queries = [s for s in spans if s.attributes.get("db.system.name") == "sqlite"]

@@ -2,18 +2,30 @@
 {% block title %}Sign in · Ledgerline{% endblock %}
 {% block content %}
 <div class="card" style="max-width:520px;margin:40px auto">
-  <h1>Development sign-in</h1>
-  <p class="muted">This picks a seeded user without a password. It only works when
-    <code>DEV_LOGIN=true</code>, and the app refuses to start that way in production.
-    Real authentication arrives in Chapter 7.</p>
+  <h1>Sign in</h1>
+  {% if error %}<p class="flag error" role="alert">{{ error }}</p>{% endif %}
+  {% if oidc %}
+  <p class="muted">You'll sign in on your company's sign-in page, then come straight back here.</p>
+  <form method="get" action="/auth/login">
+    <input type="hidden" name="next" value="{{ next }}">
+    <button type="submit">Sign in</button>
+  </form>
+  {% endif %}
+  {% if dev_login and users %}
+  {% if oidc %}<hr style="margin:24px 0">{% endif %}
+  <h2 style="font-size:16px">Development sign-in</h2>
+  <p class="muted">Picks a seeded user without a password. Only when <code>DEV_LOGIN=true</code>;
+    the app refuses to start that way in production.</p>
   <form method="post" action="/login">
+    <input type="hidden" name="next" value="{{ next }}">
     {% for u in users %}
     <p><label style="color:inherit;font-size:15px">
       <input type="radio" name="user_id" value="{{ u.id }}" {% if loop.first %}checked{% endif %}>
       {{ u.name }} <span class="muted">· {{ u.role }} · {{ u.email }}</span>
     </label></p>
     {% endfor %}
-    <button type="submit">Continue</button>
+    <button class="secondary" type="submit">Continue as this user</button>
   </form>
+  {% endif %}
 </div>
 {% endblock %}
