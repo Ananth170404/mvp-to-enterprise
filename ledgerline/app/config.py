@@ -74,6 +74,10 @@ class Settings:
     oidc_logout_url: str | None
     session_hours: int  # absolute: sign in again after this, whatever happens
     session_idle_minutes: int  # signed out after this long without a request
+    # How many proxies WE run in front of the app, each appending to
+    # X-Forwarded-For (Chapter 8, app/security.py). 0 locally; 2 in AWS
+    # (CloudFront, then the load balancer).
+    trusted_proxy_hops: int
     site_password: str | None  # shared password in front of a non-production deploy
     max_upload_bytes: int
     fake_llm_manifest: Path
@@ -128,6 +132,7 @@ def load_settings() -> Settings:
         oidc_logout_url=os.getenv("OIDC_LOGOUT_URL") or None,
         session_hours=int(os.getenv("SESSION_HOURS", "12")),
         session_idle_minutes=int(os.getenv("SESSION_IDLE_MINUTES", "120")),
+        trusted_proxy_hops=int(os.getenv("TRUSTED_PROXY_HOPS", "0")),
         site_password=os.getenv("SITE_PASSWORD") or None,
         max_upload_bytes=int(os.getenv("MAX_UPLOAD_MB", "10")) * 1024 * 1024,
         fake_llm_manifest=Path(os.getenv("FAKE_LLM_MANIFEST", base / "data" / "generated" / "manifest.json")),

@@ -142,6 +142,31 @@ resource "aws_iam_user_policy" "deploy" {
   policy = module.env.ci_deploy_policy_json
 }
 
+# Read-only access to the image registry, so the deploy job can check the
+# image's signature before promoting it (Chapter 8). Still no pushes.
+data "aws_iam_policy_document" "verify_images" {
+  statement {
+    actions   = ["ecr:GetAuthorizationToken"] # can't be limited to one repository
+    resources = ["*"]
+  }
+  statement {
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:DescribeImages",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:ListImages",
+    ]
+    resources = [data.aws_ecr_repository.app.arn]
+  }
+}
+
+resource "aws_iam_user_policy" "verify_images" {
+  name   = "read-images"
+  user   = aws_iam_user.github_ci.name
+  policy = data.aws_iam_policy_document.verify_images.json
+}
+
 # ---------------------------------------------------------------- outputs
 
 output "production_url" {

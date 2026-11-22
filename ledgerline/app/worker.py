@@ -135,6 +135,9 @@ def _expire_sessions() -> None:
     session = SessionLocal()
     try:
         delete_expired(session)
+        from app.security import delete_old_windows
+
+        delete_old_windows(session)
     finally:
         session.close()
 

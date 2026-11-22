@@ -1,0 +1,57 @@
+# Accepted findings from the infrastructure scan (guide Chapter 8).
+#
+# CI fails on any HIGH or CRITICAL finding that isn't listed here. Every entry
+# says WHY it is accepted and has an expiry date: on that date it fails CI
+# again and someone has to look at it afresh, instead of the list quietly
+# growing forever. Paths are relative to infra/.
+
+misconfigurations:
+  - id: AWS-0054 # plain HTTP between CloudFront and the load balancer
+    paths: [modules/environment/app.tf]
+    statement: >-
+      Visitors always get HTTPS (CloudFront redirects). The hop from CloudFront to
+      the ALB is HTTP because the ALB has no certificate without a domain of our own.
+      The ALB only accepts CloudFront's address range. Fix when we have a domain:
+      ACM certificate on the ALB and origin_protocol_policy = "https-only".
+    expired_at: 2027-06-30
+
+  - id: AWS-0053 # load balancer is internet-facing
+    paths: [modules/environment/app.tf]
+    statement: >-
+      CloudFront needs a public origin, and its security group admits only
+      CloudFront's managed prefix list. The later fix is a CloudFront VPC origin
+      with an internal ALB.
+    expired_at: 2027-06-30
+
+  - id: AWS-0011 # no WAF on CloudFront
+    paths: [modules/environment/app.tf]
+    statement: >-
+      Staging is behind a site password and has no real users; per-IP and per-user
+      rate limits are in the app (app/security.py). A WAF with managed rules costs
+      a monthly fee per environment; revisit before real customers use production.
+    expired_at: 2027-03-31
+
+  - id: AWS-0104 # outbound to the internet
+    paths: [modules/environment/network.tf, vm-demo/main.tf]
+    statement: >-
+      The containers call AWS APIs, the model provider and the sign-in provider,
+      all over HTTPS, so egress is TCP 443 only (plus Postgres to the database's
+      security group). Narrowing by destination needs VPC endpoints or an egress
+      proxy, which cost more than the risk is worth at this stage. vm-demo is the
+      throwaway Chapter 3 server.
+    expired_at: 2027-06-30
+
+  - id: AWS-0095 # SNS topic not encrypted with KMS
+    paths: [modules/environment/observability.tf]
+    statement: >-
+      Alarm notifications carry no customer data, and CloudWatch can only publish to
+      an encrypted topic through a customer-managed key with a custom key policy.
+    expired_at: 2027-06-30
+
+  - id: AWS-0132 # S3 encrypted with AWS-managed keys, not a customer-managed KMS key
+    paths: [modules/private_bucket/main.tf, bootstrap/main.tf]
+    statement: >-
+      All buckets are encrypted (SSE-S3), private and block public access. A
+      customer-managed key adds key policies and audit of key use at a monthly
+      cost per key; reconsider if a customer contract requires it.
+    expired_at: 2027-06-30

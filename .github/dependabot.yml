@@ -1,0 +1,44 @@
+# Dependabot opens pull requests to update dependencies (guide Chapter 8).
+# Each pull request runs the full CI, so an update that breaks a test, adds a
+# known vulnerability or fails the image scan never merges by accident.
+#
+# cooldown: wait after a release before proposing it. Most malicious releases
+# (a hijacked maintainer account publishing a poisoned version) are found and
+# pulled within days; waiting avoids being among the first to install one.
+# Dependabot's default has been 3 days since July 2026; we use 7. Security
+# updates ignore the cooldown, so fixes for known vulnerabilities aren't delayed.
+
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /ledgerline
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 7 }
+    groups:
+      python-minor-and-patch:
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: /ledgerline
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 7 }
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 7 }
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: terraform
+    directories:
+      - /ledgerline/infra/bootstrap
+      - /ledgerline/infra/staging
+      - /ledgerline/infra/production
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 7 }
+    groups:
+      terraform-providers:
+        patterns: ["*"]

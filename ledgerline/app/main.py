@@ -14,11 +14,12 @@ from urllib.parse import quote_plus, urlencode
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app import audit, auth, checks, jobs, queries, workflow
+from app import audit, auth, checks, jobs, queries, security, workflow
 from app.auth import COOKIE, STATE_COOKIE, CurrentUser, LoginRequired, SignInFailed, current_user
 from app.config import settings
 from app.db import engine, get_session
@@ -42,10 +43,15 @@ log = logging.getLogger("ledgerline")
 
 
 setup_telemetry(engine, service_version=settings.git_sha, environment=settings.app_env)
-app = FastAPI(title="Ledgerline", version="0.3.0", telemetry=fastapi_telemetry_config())
+app = FastAPI(
+    title="Ledgerline", version="0.3.0", telemetry=fastapi_telemetry_config(),
+    # Every POST must come from our own pages and carry the form's CSRF token (Chapter 8).
+    dependencies=[Depends(security.csrf_protect)],
+)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 templates.env.globals["fmt"] = fmt
 templates.env.globals["qty"] = qty
+templates.env.globals["csrf_token"] = security.csrf_token
 
 # Recognise files by their content ("magic bytes"), never by the file name or
 # the browser-supplied content type, both of which the uploader controls.
@@ -64,6 +70,18 @@ def sniff(data: bytes) -> tuple[str, str] | None:
 
 
 UNGATED_PATHS = {"/livez", "/readyz"}
+
+
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+
+
+@app.middleware("http")
+async def response_security_headers(request: Request, call_next):
+    """Security headers on every response, errors included (app/security.py)."""
+    response = await call_next(request)
+    for name, value in security.security_headers(request).items():
+        response.headers.setdefault(name, value)
+    return response
 
 
 @app.middleware("http")
@@ -202,6 +220,7 @@ def login_page(request: Request, session: Session = Depends(get_session)):
 @app.post("/login")
 def dev_login(request: Request, user_id: str = Form(...), next: str = Form("/invoices"),
               session: Session = Depends(get_session)):
+    security.rate_limit(session, "signin", security.client_ip(request))
     user = session.get(User, user_id) if settings.dev_login else None
     if user is None:
         raise HTTPException(status_code=400)
@@ -215,6 +234,7 @@ def dev_login(request: Request, user_id: str = Form(...), next: str = Form("/inv
 def oidc_login(request: Request, next: str | None = None, session: Session = Depends(get_session)):
     if not auth.oidc_enabled():
         raise HTTPException(status_code=404)
+    security.rate_limit(session, "signin", security.client_ip(request))
     url, state = auth.begin_login(session, request, next)
     response = RedirectResponse(url, status_code=303)
     response.set_cookie(STATE_COOKIE, state, max_age=600, **_cookie_args())
@@ -226,6 +246,7 @@ def oidc_callback(request: Request, code: str | None = None, state: str | None =
                   error: str | None = None, session: Session = Depends(get_session)):
     if not auth.oidc_enabled():
         raise HTTPException(status_code=404)
+    security.rate_limit(session, "signin", security.client_ip(request))
     if error or not code:
         raise SignInFailed("Sign-in was cancelled or refused by the sign-in service.")
     user, return_to, id_token = auth.finish_login(session, request, code, state or "")
@@ -274,6 +295,7 @@ async def upload_invoice(
     user: CurrentUser = Depends(current_user),
     session: Session = Depends(get_session),
 ):
+    security.rate_limit(session, "upload", user.id)
     data = await file.read(settings.max_upload_bytes + 1)
     if len(data) > settings.max_upload_bytes:
         raise HTTPException(status_code=413, detail="File too large")
@@ -346,6 +368,8 @@ def invoice_document(invoice_id: str, user: CurrentUser = Depends(current_user),
     return Response(
         storage.get(invoice.document.storage_key),
         media_type=invoice.document.mime_type,
+        # The browser shows it (inline) but must take our type for it (nosniff):
+        # an "invoice" can't turn itself into HTML that runs on our origin.
         headers={"Content-Disposition": "inline", "X-Content-Type-Options": "nosniff"},
     )
 

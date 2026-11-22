@@ -50,10 +50,15 @@ def main() -> None:
             sys.exit(f"No user {args.email} on the sign-in page. Is DEV_LOGIN on, and the demo data seeded?")
         if client.post("/login", data={"user_id": match.group(1)}).status_code != 303:
             sys.exit("Sign-in failed.")
+        # Every form carries a CSRF token tied to the session (Chapter 8); read it like a browser would.
+        token = re.search(r'name="csrf_token" value="([0-9a-f]+)"', client.get("/invoices").text)
+        if not token:
+            sys.exit("No CSRF token on /invoices.")
 
         started = time.monotonic()
         for i, path in enumerate(files, 1):
-            response = client.post("/invoices", files={"file": (path.name, path.read_bytes())})
+            response = client.post("/invoices", data={"csrf_token": token.group(1)},
+                                   files={"file": (path.name, path.read_bytes())})
             if response.status_code != 303:
                 sys.exit(f"Upload {i} failed: HTTP {response.status_code} {response.text[:200]}")
         elapsed = time.monotonic() - started

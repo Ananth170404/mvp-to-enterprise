@@ -39,6 +39,7 @@ data "aws_iam_policy_document" "github_ci_ecr" {
       "ecr:DescribeImages",
       "ecr:GetDownloadUrlForLayer",
       "ecr:InitiateLayerUpload",
+      "ecr:ListImages", # signatures are found through the referrers API (Chapter 8)
       "ecr:PutImage",
       "ecr:UploadLayerPart",
     ]

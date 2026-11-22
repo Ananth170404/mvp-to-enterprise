@@ -172,6 +172,9 @@ resource "aws_ecs_task_definition" "app" {
       # OpenTelemetry: the same variables as local development, a different address.
       { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://localhost:4318" },
       { name = "OTEL_SERVICE_NAME", value = "ledgerline" },
+      # CloudFront, then the load balancer: the client is 2nd from the right in
+      # X-Forwarded-For (app/security.py, Chapter 8).
+      { name = "TRUSTED_PROXY_HOPS", value = "2" },
     ])
 
     # Injected as environment variables when the container starts. The values

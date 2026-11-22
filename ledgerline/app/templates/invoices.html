@@ -4,7 +4,7 @@
 <div class="grid two">
   <div class="card">
     <h2>Upload an invoice</h2>
-    <form method="post" action="/invoices" enctype="multipart/form-data" class="row">
+    <form method="post" action="/invoices" enctype="multipart/form-data" class="row"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg" required>
       <button type="submit">Upload</button>
     </form>
@@ -12,7 +12,7 @@
   </div>
   <div class="card">
     <h2>Import purchase orders</h2>
-    <form method="post" action="/purchase-orders/import" enctype="multipart/form-data" class="row">
+    <form method="post" action="/purchase-orders/import" enctype="multipart/form-data" class="row"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <input type="file" name="file" accept=".csv" required>
       <button class="secondary" type="submit">Import CSV</button>
     </form>
@@ -21,8 +21,8 @@
 </div>
 
 <div class="card">
-  <div class="row" style="justify-content:space-between;margin-bottom:8px">
-    <h2 style="margin:0">Invoices</h2>
+  <div class="row spread mb-8">
+    <h2 class="m-0">Invoices</h2>
     <span class="muted">LLM spend so far: ${{ "%.4f"|format(spend|float) }}</span>
   </div>
   <p class="muted">
@@ -44,8 +44,8 @@
         <td>
           {% set errs = inv.flags | selectattr("severity", "equalto", "error") | list %}
           {% set warns = inv.flags | selectattr("severity", "equalto", "warning") | list %}
-          {% if errs %}<span style="color:var(--err)">{{ errs|length }} error{{ "s" if errs|length > 1 }}</span>{% endif %}
-          {% if warns %}<span style="color:var(--warn)">{{ warns|length }} warning{{ "s" if warns|length > 1 }}</span>{% endif %}
+          {% if errs %}<span class="text-err">{{ errs|length }} error{{ "s" if errs|length > 1 }}</span>{% endif %}
+          {% if warns %}<span class="text-warn">{{ warns|length }} warning{{ "s" if warns|length > 1 }}</span>{% endif %}
         </td>
         <td class="muted">{{ inv.created_at.strftime("%d %b %H:%M") }}</td>
       </tr>

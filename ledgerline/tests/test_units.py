@@ -42,7 +42,7 @@ def _settings(**overrides) -> Settings:
         queue_backend="sqs", job_queue_url="https://sqs.example/123/q",
         oidc_discovery_url="https://idp.example/.well-known/openid-configuration", oidc_client_id="c",
         oidc_client_secret="s", public_base_url="https://app.example", oidc_logout_url=None,
-        session_hours=12, session_idle_minutes=120,
+        session_hours=12, session_idle_minutes=120, trusted_proxy_hops=2,
     )
     base.update(overrides)
     return Settings(**base)

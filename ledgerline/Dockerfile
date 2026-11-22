@@ -7,7 +7,7 @@
 
 # Debian 13 (trixie) base. The dev image adds a v16 postgresql-client to match
 # the Postgres 16 server (see the dev stage).
-FROM python:3.12-slim-trixie AS base
+FROM python:3.12-slim-trixie@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS base
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -30,8 +30,12 @@ EXPOSE 8000
 # --timeout-graceful-shutdown: on a deploy, finish in-flight requests before
 # exiting (ECS waits 30 s by default before force-killing). Work that takes
 # longer is recovered on the next start (app/maintenance.py).
+# No --proxy-headers --forwarded-allow-ips "*": that makes uvicorn report the
+# LEFTMOST X-Forwarded-For entry as the client, which the client writes itself.
+# app/security.py reads the header with TRUSTED_PROXY_HOPS instead (Chapter 8).
+# --no-server-header: don't advertise the server software and version.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
-     "--proxy-headers", "--forwarded-allow-ips", "*", "--timeout-graceful-shutdown", "25"]
+     "--no-server-header", "--timeout-graceful-shutdown", "25"]
 
 # ---------------------------------------------------------------- dev
 FROM base AS dev
@@ -48,4 +52,4 @@ COPY . .
 RUN mkdir -p /data/storage /app/data && chown -R appuser /app /data
 USER appuser
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--no-server-header"]

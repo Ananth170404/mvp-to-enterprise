@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from app import auth
 from app.main import app
 from app.models import AuditEvent, UserSession, utcnow
-from tests.helpers import client_for
+from tests.helpers import client_for, csrf_for
 
 ISSUER = "https://idp.example/realms/test"
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -130,7 +130,7 @@ def test_sign_out_ends_the_session_here_and_at_the_provider(db, idp):
     client = TestClient(app)
     state = _start(client, idp)
     client.get("/auth/callback", params={"code": "the-code", "state": state}, follow_redirects=False)
-    r = client.post("/logout", follow_redirects=False)
+    r = client.post("/logout", data={"csrf_token": csrf_for(client)}, follow_redirects=False)
     target = urlsplit(r.headers["location"])
     assert f"{target.scheme}://{target.netloc}{target.path}" == f"{ISSUER}/logout"
     assert "id_token_hint" in parse_qs(target.query)

@@ -12,7 +12,9 @@
 # the old version keeps serving while they run (expand/contract, guide 2.6).
 #
 # Usage (CI sets these):
-#   IMAGE=<registry>/ledgerline:<sha> CLUSTER=ledgerline-staging scripts/deploy_ecs.sh
+#   IMAGE=<registry>/ledgerline@sha256:<digest> CLUSTER=ledgerline-staging scripts/deploy_ecs.sh
+# (A tag such as ledgerline:<sha> works too. CI deploys by digest since
+# Chapter 8: the digest is what was scanned and signed.)
 set -euo pipefail
 
 : "${IMAGE:?set IMAGE to the full image reference}"
@@ -35,7 +37,7 @@ register() {
   local family="$1"
   aws ecs describe-task-definition --task-definition "$family" --query taskDefinition --output json \
     | jq --arg image "$IMAGE" '
-        (.containerDefinitions[] | select(.image | test("/ledgerline:"))).image = $image
+        (.containerDefinitions[] | select(.image | test("/ledgerline[:@]"))).image = $image
         | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
               .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)' \
     > "$workdir/$family.json"

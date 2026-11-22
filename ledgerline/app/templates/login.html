@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Sign in · Ledgerline{% endblock %}
 {% block content %}
-<div class="card" style="max-width:520px;margin:40px auto">
+<div class="card narrow-card">
   <h1>Sign in</h1>
   {% if error %}<p class="flag error" role="alert">{{ error }}</p>{% endif %}
   {% if oidc %}
@@ -12,14 +12,14 @@
   </form>
   {% endif %}
   {% if dev_login and users %}
-  {% if oidc %}<hr style="margin:24px 0">{% endif %}
-  <h2 style="font-size:16px">Development sign-in</h2>
+  {% if oidc %}<hr class="spaced">{% endif %}
+  <h2 class="h2-small">Development sign-in</h2>
   <p class="muted">Picks a seeded user without a password. Only when <code>DEV_LOGIN=true</code>;
     the app refuses to start that way in production.</p>
-  <form method="post" action="/login">
+  <form method="post" action="/login"><input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
     <input type="hidden" name="next" value="{{ next }}">
     {% for u in users %}
-    <p><label style="color:inherit;font-size:15px">
+    <p><label class="choice">
       <input type="radio" name="user_id" value="{{ u.id }}" {% if loop.first %}checked{% endif %}>
       {{ u.name }} <span class="muted">· {{ u.role }} · {{ u.email }}</span>
     </label></p>

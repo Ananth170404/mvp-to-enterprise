@@ -20,17 +20,19 @@ resource "aws_ecr_repository" "app" {
   }
 }
 
-# Keep the 20 most recent images; older ones are deleted automatically.
+# Keep the 60 most recent images; older ones are deleted automatically.
+# (Since Chapter 8 each release also stores a signature and an SBOM
+# attestation beside its image, so 60 is roughly the last 20 releases.)
 resource "aws_ecr_lifecycle_policy" "app" {
   repository = aws_ecr_repository.app.name
   policy = jsonencode({
     rules = [{
       rulePriority = 1
-      description  = "Keep the last 20 images"
+      description  = "Keep the last 60 images"
       selection = {
         tagStatus   = "any"
         countType   = "imageCountMoreThan"
-        countNumber = 20
+        countNumber = 60
       }
       action = { type = "expire" }
     }]
