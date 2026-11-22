@@ -17,6 +17,7 @@ anyio==4.15.1
     #   -c requirements.txt
     #   google-genai
     #   httpx
+    #   httpx2
     #   starlette
 boolean-py==5.0
     # via license-expression
@@ -31,8 +32,10 @@ botocore==1.43.118
     #   boto3
     #   moto
     #   s3transfer
-cachecontrol==0.14.4
-    # via pip-audit
+cachecontrol[filecache]==0.14.4
+    # via
+    #   cachecontrol
+    #   pip-audit
 certifi==2026.10.23
     # via
     #   -c requirements.txt
@@ -75,11 +78,11 @@ fastapi==0.162.0
     #   -r requirements.in
 filelock==4.2.4
     # via cachecontrol
-google-auth==2.62.0
+google-auth[requests]==2.62.0
     # via
     #   -c requirements.txt
     #   google-genai
-google-genai==2.33.0
+google-genai==3.3.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
@@ -91,22 +94,31 @@ h11==0.16.0
     # via
     #   -c requirements.txt
     #   httpcore
+    #   httpcore2
     #   uvicorn
 httpcore==1.0.9
     # via
     #   -c requirements.txt
     #   httpx
+httpcore2==2.16.2
+    # via
+    #   -c requirements.txt
+    #   httpx2
 httpx==0.28.1
     # via
     #   -c requirements.txt
     #   -r requirements-dev.in
     #   -r requirements.in
+httpx2==2.16.2
+    # via
+    #   -c requirements.txt
     #   google-genai
 idna==3.20
     # via
     #   -c requirements.txt
     #   anyio
     #   httpx
+    #   httpx2
     #   requests
 iniconfig==2.3.1
     # via pytest
@@ -135,7 +147,7 @@ markupsafe==3.0.4
     #   werkzeug
 mdurl==0.1.2
     # via markdown-it-py
-moto==5.2.4
+moto[s3]==5.2.4
     # via -r requirements-dev.in
 msgpack==1.2.3
     # via cachecontrol
@@ -149,7 +161,7 @@ opentelemetry-api==1.45.2
     #   opentelemetry-instrumentation-httpx
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
-opentelemetry-exporter-http-transport==0.66b2
+opentelemetry-exporter-http-transport[requests]==0.66b2
     # via
     #   -c requirements.txt
     #   opentelemetry-exporter-otlp-proto-http
@@ -207,8 +219,6 @@ pillow==13.0.0
     # via
     #   -r requirements-dev.in
     #   reportlab
-pip==26.2.2
-    # via pip-api
 pip-api==0.0.35
     # via pip-audit
 pip-audit==2.10.1
@@ -224,7 +234,7 @@ protobuf==7.36.2
     #   -c requirements.txt
     #   googleapis-common-protos
     #   opentelemetry-proto
-psycopg==3.3.6
+psycopg[binary]==3.3.6
     # via
     #   -c requirements.txt
     #   -r requirements.in
@@ -262,7 +272,7 @@ pygments==2.21.0
     # via
     #   pytest
     #   rich
-pyjwt==2.15.1
+pyjwt[crypto]==2.15.1
     # via
     #   -c requirements.txt
     #   -r requirements.in
@@ -338,6 +348,11 @@ tomli==2.5.0
     # via pip-audit
 tomli-w==1.2.0
     # via pip-audit
+truststore==0.10.5
+    # via
+    #   -c requirements.txt
+    #   httpcore2
+    #   httpx2
 typing-extensions==4.16.0
     # via
     #   -c requirements.txt
@@ -346,6 +361,7 @@ typing-extensions==4.16.0
     #   cyclonedx-python-lib
     #   fastapi
     #   google-genai
+    #   httpx2
     #   opentelemetry-api
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-sdk

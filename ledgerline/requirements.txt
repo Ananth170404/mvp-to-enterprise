@@ -10,6 +10,7 @@ anyio==4.15.1
     # via
     #   google-genai
     #   httpx
+    #   httpx2
     #   starlette
 boto3==1.43.118
     # via -r requirements.in
@@ -37,26 +38,30 @@ distro==1.9.0
     # via google-genai
 fastapi==0.162.0
     # via -r requirements.in
-google-auth==2.62.0
+google-auth[requests]==2.62.0
     # via google-genai
-google-genai==2.33.0
+google-genai==3.3.0
     # via -r requirements.in
 googleapis-common-protos==1.76.0
     # via opentelemetry-exporter-otlp-proto-http
 h11==0.16.0
     # via
     #   httpcore
+    #   httpcore2
     #   uvicorn
 httpcore==1.0.9
     # via httpx
+httpcore2==2.16.2
+    # via httpx2
 httpx==0.28.1
-    # via
-    #   -r requirements.in
-    #   google-genai
+    # via -r requirements.in
+httpx2==2.16.2
+    # via google-genai
 idna==3.20
     # via
     #   anyio
     #   httpx
+    #   httpx2
     #   requests
 jinja2==3.1.6
     # via -r requirements.in
@@ -79,7 +84,7 @@ opentelemetry-api==1.45.2
     #   opentelemetry-instrumentation-httpx
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
-opentelemetry-exporter-http-transport==0.66b2
+opentelemetry-exporter-http-transport[requests]==0.66b2
     # via opentelemetry-exporter-otlp-proto-http
 opentelemetry-exporter-otlp-common==0.66b2
     # via opentelemetry-exporter-otlp-proto-http
@@ -113,7 +118,7 @@ protobuf==7.36.2
     # via
     #   googleapis-common-protos
     #   opentelemetry-proto
-psycopg==3.3.6
+psycopg[binary]==3.3.6
     # via -r requirements.in
 psycopg-binary==3.3.6
     # via psycopg
@@ -130,7 +135,7 @@ pydantic==2.14.1
     #   google-genai
 pydantic-core==2.50.1
     # via pydantic
-pyjwt==2.15.1
+pyjwt[crypto]==2.15.1
     # via -r requirements.in
 python-dateutil==2.9.0.post0
     # via botocore
@@ -158,12 +163,17 @@ starlette==1.10.0
     # via fastapi
 tenacity==9.1.4
     # via google-genai
+truststore==0.10.5
+    # via
+    #   httpcore2
+    #   httpx2
 typing-extensions==4.16.0
     # via
     #   alembic
     #   anyio
     #   fastapi
     #   google-genai
+    #   httpx2
     #   opentelemetry-api
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-sdk
