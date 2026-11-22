@@ -32,11 +32,14 @@ resource "aws_cognito_user_pool" "main" {
     case_sensitive = false
   }
 
+  # Length, not complexity (NIST SP 800-63B-4, 2025): at least 15 characters
+  # when the password is the only factor, and no "must contain a digit and a
+  # capital" rules, which push people to Password1!-style patterns.
   password_policy {
-    minimum_length                   = 12
-    require_lowercase                = true
-    require_uppercase                = true
-    require_numbers                  = true
+    minimum_length                   = 15
+    require_lowercase                = false
+    require_uppercase                = false
+    require_numbers                  = false
     require_symbols                  = false
     temporary_password_validity_days = 3
   }
